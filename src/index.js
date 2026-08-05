@@ -146,7 +146,9 @@ async function handleCallback(url, env) {
 
   let dest = '/'
   try { dest = atob(url.searchParams.get('state') || '') || '/' } catch {}
-  if (!dest.startsWith('/')) dest = '/'
+  // must be a same-origin absolute path: "//host" and "/\host" are
+  // protocol-relative redirects in browsers -> open redirect
+  if (!/^\/(?![/\\])/.test(dest)) dest = '/'
 
   return new Response(null, {
     status: 302,
