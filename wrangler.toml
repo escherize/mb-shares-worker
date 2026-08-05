@@ -1,0 +1,18 @@
+name = "mb-shares"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[[kv_namespaces]]
+binding = "SHARES"
+id = "8e746d88c3254e1b83b82eb02db9be0c"
+
+[vars]
+# public OAuth client id -- set after creating the Google OAuth client
+GOOGLE_CLIENT_ID = "1089089243557-frsr7vf4s7pja4b3uq33naughhh0gk1m.apps.googleusercontent.com"
+ALLOWED_DOMAIN = "metabase.com"
+ADMIN_EMAIL = "bryan@metabase.com"
+
+# secrets (set via: bun x wrangler secret put <NAME>):
+#   GOOGLE_CLIENT_SECRET  -- from the Google OAuth client
+#   SESSION_SECRET        -- random, signs session cookies
+#   UPLOAD_TOKEN          -- random, authorizes the `share` CLI

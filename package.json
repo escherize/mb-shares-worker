@@ -1,0 +1,7 @@
+{
+  "name": "mb-shares-worker",
+  "private": true,
+  "dependencies": {
+    "marked": "^15.0.0"
+  }
+}
