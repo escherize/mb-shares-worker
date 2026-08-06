@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# share -- publish files to the private mb-shares worker (Cloudflare R2).
+# Publishing is instant (parallel PUTs, no builds). Viewers sign in with
+# their @metabase.com Google account.
+set -euo pipefail
+
+CONF="$HOME/.config/mb-shares/env"
+[ -f "$CONF" ] || { echo "missing $CONF (needs BASE_URL and UPLOAD_TOKEN)" >&2; exit 1; }
+. "$CONF"
+
+auth() { curl -sf -H "Authorization: Bearer $UPLOAD_TOKEN" "$@"; }
+enc() { python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+usage: share [-e] <file-or-dir> [name]   publish (new slug w/ random suffix)
+       share <files...>                  glob form: one share named for parent dir
+       share -e <file-or-dir> <slug>     overwrite existing share (same URL)
+       share rm <slug>                   delete a share
+       share                             list all shares
+
+examples:
+  share thing.md                   publish file -> prints URL instantly
+  share ./some-dir                 publish whole directory
+  share ./dir cool-name            custom name (still gets random suffix)
+  pbpaste | share -f slides.html   stdin -> published under that filename
+  share -e ./dir cool-name-a3f2b   overwrite existing share, same URL
+  share                            list your shares + URLs
+  share rm cool-name-a3f2b         delete
+
+related:
+  ggc report.html                  gist-muscle-memory publish
+  ggc doc.md                       md + its local images, auto-attached
+  cat foo.clj | ggc                pipe -> language detected, highlighted
+  ggcp                             clipboard -> published
+  ggc-gist / ggcp-gist             old public-gist versions (outside-org sharing)
+
+Viewers need a @metabase.com Google login; URLs are safe to paste anywhere.
+EOF
+    exit 0 ;;
+  rm)
+    slug="${2:?usage: share rm <slug>}"
+    auth -X DELETE "$BASE_URL/$(enc "$slug")/"
+    exit 0 ;;
+esac
+
+if [ $# -eq 0 ]; then
+  auth "$BASE_URL/_list"
+  exit 0
+fi
+
+EDIT=0
+if [ "${1:-}" = "-e" ] || [ "${1:-}" = "--edit" ]; then EDIT=1; shift; fi
+
+# stdin mode (gh-gist muscle memory): `pbpaste | share -f slides.html [name]`
+if [ "${1:-}" = "-f" ] || [ "${1:-}" = "--filename" ]; then
+  FNAME="${2:?usage: ... | share [-e] -f <filename> [name]}"
+  TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+  cat > "$TMP/$FNAME"
+  shift 2; set -- "$TMP/$FNAME" "$@"
+fi
+
+SRC="${1:?usage: share [-e] <file-or-dir> [name]}"
+SRC="$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")"
+[ -e "$SRC" ] || { echo "no such path: $SRC" >&2; exit 1; }
+
+MULTI=()
+if [ -n "${2:-}" ] && [ -e "$2" ]; then
+  # glob form (`share dir/*`): every extra arg is an existing path -> one
+  # share named for the first arg's parent dir, files at top level
+  MULTI=("$@")
+  NAME="$(basename "$(dirname "$SRC")")"
+elif [ -n "${2:-}" ]; then
+  NAME="$2"
+elif [ -f "$SRC" ]; then
+  base="$(basename "$SRC")"; NAME="${base%.*}"
+else
+  NAME="$(basename "$SRC")"
+fi
+NAME="$(echo "$NAME" | tr ' ' '-')"
+
+if [ "$EDIT" = 1 ]; then
+  auth "$BASE_URL/_list" | grep -qx "$NAME" \
+    || { echo "no existing share '$NAME' (run \`share\` to list); omit -e to create new" >&2; exit 1; }
+  auth -X DELETE "$BASE_URL/$(enc "$NAME")/" > /dev/null
+else
+  NAME="$NAME-$(openssl rand -hex 3)"
+fi
+
+URL="$BASE_URL/$(enc "$NAME")/"
+echo "$URL"
+
+put() { auth -T "$1" "$BASE_URL/$(enc "$NAME")/$(enc "$2")" > /dev/null; }
+
+if [ "${#MULTI[@]}" -gt 0 ]; then
+  for s in ${MULTI[@]+"${MULTI[@]}"}; do
+    [ -e "$s" ] || { echo "no such path: $s" >&2; exit 1; }
+    if [ -f "$s" ]; then
+      put "$s" "$(basename "$s")"
+    else
+      while IFS= read -r f; do
+        put "$f" "$(basename "$s")/${f#"${s%/}"/}"
+      done < <(find "$s" -type f ! -path '*/.git/*')
+    fi
+  done
+elif [ -f "$SRC" ]; then
+  # single md/html becomes the share's index so the slug URL renders it directly
+  case "$SRC" in
+    *.md)   put "$SRC" index.md ;;
+    *.html) put "$SRC" index.html ;;
+    *)      put "$SRC" "$(basename "$SRC")" ;;
+  esac
+else
+  pids=()
+  while IFS= read -r f; do
+    put "$f" "${f#"$SRC"/}" &
+    pids+=($!)
+    [ "${#pids[@]}" -ge 8 ] && { wait "${pids[0]}"; pids=("${pids[@]:1}"); }
+  done < <(find "$SRC" -type f ! -path '*/.git/*')
+  for p in ${pids[@]+"${pids[@]}"}; do wait "$p"; done
+fi
+
+echo "uploaded" >&2

@@ -178,20 +178,58 @@ function page(title, body) {
 <title>${esc(title)}</title>
 <style>
   body{max-width:52rem;margin:2rem auto;padding:0 1rem;font:16px/1.6 -apple-system,system-ui,sans-serif;color:#1f2328}
-  pre{background:#f6f8fa;padding:1rem;border-radius:6px;overflow-x:auto}
+  /* pre breaks out of the 52rem prose column: as wide as its content needs,
+     capped at the viewport, centered; overflow-x scrolls only past that */
+  pre{background:#f6f8fa;padding:1rem;border-radius:6px;overflow-x:auto;
+      box-sizing:border-box;width:fit-content;min-width:100%;
+      max-width:calc(100vw - 2rem);position:relative;left:50%;transform:translateX(-50%)}
   code{background:#f6f8fa;padding:.15em .35em;border-radius:4px;font-size:.9em}
   pre code{background:none;padding:0}
   img{max-width:100%}
   a{color:#0969da}
   blockquote{border-left:4px solid #d1d9e0;margin-left:0;padding-left:1rem;color:#59636e}
   table{border-collapse:collapse}td,th{border:1px solid #d1d9e0;padding:.3em .7em}
+  .anchor{opacity:0;margin-right:.35em;text-decoration:none}
+  :hover>.anchor{opacity:1}
+  :target{background:#fff8c5}
   @media (prefers-color-scheme: dark){
     body{background:#0d1117;color:#e6edf3}
     pre,code{background:#161b22}
     a{color:#4493f8}
+    :target{background:#3a3000}
   }
 </style>
-${body}`,
+${body}
+<script>
+(function () {
+  var used = new Set(Array.from(document.querySelectorAll('[id]'), function (e) { return e.id }))
+  function claim(want) {
+    var id = want, n = 2
+    while (used.has(id)) id = want + '.' + n++
+    used.add(id)
+    return id
+  }
+  function link(el, id) {
+    el.id = id
+    var a = document.createElement('a')
+    a.href = '#' + id; a.textContent = '#'; a.className = 'anchor'
+    el.prepend(a)
+  }
+  document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function (h) {
+    link(h, h.id || claim(h.textContent.trim().toLowerCase().replace(/[^\\w]+/g, '-').replace(/^-|-$/g, '') || 'h'))
+  })
+  // ordered-list items: id encodes the numbering path, e.g. item-3-2 = 3.b
+  document.querySelectorAll('ol > li').forEach(function (li) {
+    var path = [], el = li
+    while (el && el.tagName === 'LI' && el.parentElement.tagName === 'OL') {
+      var ol = el.parentElement
+      path.unshift((ol.start || 1) + Array.prototype.indexOf.call(ol.children, el))
+      el = ol.parentElement.closest('li')
+    }
+    link(li, claim('item-' + path.join('-')))
+  })
+})()
+</script>`,
     { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache' } },
   )
 }
@@ -233,6 +271,21 @@ async function serve(url, email, env) {
   return notFound()
 }
 
+// Grammar hints for the <pre> page. Unknown text extensions still render,
+// just without a language class (hljs auto-detects among its common set).
+// Values are highlight.js language names (also the CDN module filename).
+const CODE_LANGS = {
+  clj: 'clojure', cljs: 'clojure', cljc: 'clojure', edn: 'clojure', bb: 'clojure',
+  py: 'python', rb: 'ruby', sh: 'bash', zsh: 'bash', bash: 'bash', sql: 'sql',
+  yaml: 'yaml', yml: 'yaml', toml: 'ini', go: 'go', rs: 'rust',
+  java: 'java', kt: 'kotlin', ts: 'typescript', tsx: 'typescript', jsx: 'javascript',
+  c: 'c', h: 'c', cpp: 'cpp', diff: 'diff', patch: 'diff',
+  gleam: 'rust', // no official hljs gleam grammar; rust keywords are close
+  lis: 'rust', // Lisette: rust-like syntax, no hljs grammar of its own
+}
+
+const HLJS = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1'
+
 // Returns a Response, or null when the key doesn't exist.
 async function render(key, env) {
   const ext = key.split('.').pop().toLowerCase()
@@ -242,12 +295,31 @@ async function render(key, env) {
     const title = (md.match(/^#\s+(.+)$/m) || [, key])[1]
     return page(title, marked.parse(md))
   }
-  const body = await env.SHARES.get(key, 'stream')
-  if (body === null) return null
-  return new Response(body, {
-    headers: {
-      'content-type': TYPES[ext] || 'application/octet-stream',
-      'cache-control': 'private, no-cache',
-    },
-  })
+  if (TYPES[ext]) {
+    const body = await env.SHARES.get(key, 'stream')
+    if (body === null) return null
+    return new Response(body, {
+      headers: { 'content-type': TYPES[ext], 'cache-control': 'private, no-cache' },
+    })
+  }
+
+  // Unknown extension: text renders as a highlighted <pre> page; only
+  // genuinely binary content (null byte early on) falls back to download.
+  const buf = await env.SHARES.get(key, 'arrayBuffer')
+  if (buf === null) return null
+  if (new Uint8Array(buf, 0, Math.min(8192, buf.byteLength)).includes(0)) {
+    return new Response(buf, {
+      headers: { 'content-type': 'application/octet-stream', 'cache-control': 'private, no-cache' },
+    })
+  }
+  const lang = CODE_LANGS[ext]
+  return page(
+    key.split('/').pop(),
+    `<link rel="stylesheet" media="(prefers-color-scheme: light)" href="${HLJS}/styles/github.min.css">
+<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
+<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(new TextDecoder().decode(buf))}</code></pre>
+<script src="${HLJS}/highlight.min.js"></script>
+${lang ? `<script src="${HLJS}/languages/${lang}.min.js"></script>` : ''}
+<script>hljs.highlightAll()</script>`,
+  )
 }
