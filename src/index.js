@@ -27,7 +27,7 @@ export default {
     const email = await sessionEmail(req, env)
     if (!email) return redirectToGoogle(url, env)
 
-    return serve(url, email, env)
+    return serve(url, email, env, req.headers.get('accept'))
   },
 }
 
@@ -168,6 +168,7 @@ const TYPES = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
   webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon',
   pdf: 'application/pdf', csv: 'text/csv', mp4: 'video/mp4', wasm: 'application/wasm',
+  jsonl: 'application/x-ndjson', ndjson: 'application/x-ndjson',
 }
 
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
@@ -178,11 +179,16 @@ function page(title, body) {
 <title>${esc(title)}</title>
 <style>
   body{max-width:52rem;margin:2rem auto;padding:0 1rem;font:16px/1.6 -apple-system,system-ui,sans-serif;color:#1f2328}
-  /* pre breaks out of the 52rem prose column: as wide as its content needs,
+  /* pre/table break out of the 52rem prose column: as wide as content needs,
      capped at the viewport, centered; overflow-x scrolls only past that */
-  pre{background:#f6f8fa;padding:1rem;border-radius:6px;overflow-x:auto;
+  pre,table{background:#f6f8fa;padding:1rem;border-radius:6px;overflow-x:auto;
       box-sizing:border-box;width:fit-content;min-width:100%;
       max-width:calc(100vw - 2rem);position:relative;left:50%;transform:translateX(-50%)}
+  table{display:block;background:none;padding:0}
+  button.copy{display:block;margin:0 0 .25rem auto;font:inherit;font-size:.75rem;
+      color:#59636e;background:none;border:1px solid #d1d9e0;border-radius:6px;
+      padding:.1em .6em;cursor:pointer}
+  button.copy:hover{color:#1f2328;border-color:#8b949e}
   code{background:#f6f8fa;padding:.15em .35em;border-radius:4px;font-size:.9em}
   pre code{background:none;padding:0}
   img{max-width:100%}
@@ -195,8 +201,11 @@ function page(title, body) {
   @media (prefers-color-scheme: dark){
     body{background:#0d1117;color:#e6edf3}
     pre,code{background:#161b22}
+    table{background:none}
     a{color:#4493f8}
     :target{background:#3a3000}
+    button.copy{color:#8b949e;border-color:#30363d}
+    button.copy:hover{color:#e6edf3;border-color:#8b949e}
   }
 </style>
 ${body}
@@ -228,6 +237,17 @@ ${body}
     }
     link(li, claim('item-' + path.join('-')))
   })
+  document.querySelectorAll('pre').forEach(function (pre) {
+    var b = document.createElement('button')
+    b.textContent = 'copy'; b.className = 'copy'
+    b.onclick = function () {
+      navigator.clipboard.writeText(pre.textContent).then(function () {
+        b.textContent = 'copied'
+        setTimeout(function () { b.textContent = 'copy' }, 1200)
+      })
+    }
+    pre.insertAdjacentElement('beforebegin', b)
+  })
 })()
 </script>`,
     { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache' } },
@@ -236,7 +256,7 @@ ${body}
 
 const notFound = () => page('not found', '<h1>404</h1>')
 
-async function serve(url, email, env) {
+async function serve(url, email, env, accept) {
   const key = decodeURIComponent(url.pathname.slice(1))
 
   if (key === '') {
@@ -251,7 +271,7 @@ async function serve(url, email, env) {
 
   if (key.endsWith('/')) {
     for (const cand of [`${key}index.md`, `${key}index.html`]) {
-      const hit = await render(cand, env)
+      const hit = await render(cand, env, accept)
       if (hit) return hit
     }
     const names = await allKeys(env, key)
@@ -262,7 +282,7 @@ async function serve(url, email, env) {
     return page(key, `<h1>${esc(key.replace(/\/$/, ''))}</h1><ul>${items.join('')}</ul>`)
   }
 
-  const hit = await render(key, env)
+  const hit = await render(key, env, accept)
   if (hit) return hit
 
   // /name -> /name/ when the share exists
@@ -286,15 +306,83 @@ const CODE_LANGS = {
 
 const HLJS = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1'
 
+function codePage(key, text, lang) {
+  return page(
+    key.split('/').pop(),
+    `<link rel="stylesheet" media="(prefers-color-scheme: light)" href="${HLJS}/styles/github.min.css">
+<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
+<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(text)}</code></pre>
+<script src="${HLJS}/highlight.min.js"></script>
+${lang ? `<script src="${HLJS}/languages/${lang}.min.js"></script>` : ''}
+<script>hljs.highlightAll()</script>`,
+  )
+}
+
+// Reformat json/jsonl for display; malformed input passes through untouched.
+function prettyJson(text, ext) {
+  try {
+    if (ext === 'json') return JSON.stringify(JSON.parse(text), null, 2)
+    return text.trim().split('\n')
+      .map((l) => JSON.stringify(JSON.parse(l), null, 2)).join('\n\n')
+  } catch { return text }
+}
+
+// Minimal CSV parser: quoted fields, "" escapes, CRLF. No streaming (KV
+// values cap at 25MB; csvPage slices input before parsing anyway).
+function csvCells(text) {
+  const rows = [[]]
+  let cell = '', q = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++ } else q = false }
+      else cell += c
+    } else if (c === '"') q = true
+    else if (c === ',') { rows.at(-1).push(cell); cell = '' }
+    else if (c === '\n') { rows.at(-1).push(cell.replace(/\r$/, '')); cell = ''; rows.push([]) }
+    else cell += c
+  }
+  rows.at(-1).push(cell)
+  if (rows.at(-1).length === 1 && rows.at(-1)[0] === '') rows.pop()
+  return rows
+}
+
+const MAX_CSV_ROWS = 1000
+
+function csvPage(key, text) {
+  const clipped = text.length > 2_000_000
+  const rows = csvCells(clipped ? text.slice(0, 2_000_000).replace(/\n[^\n]*$/, '') : text)
+  const tr = (cells, tag) => `<tr>${cells.map((c) => `<${tag}>${esc(c)}</${tag}>`).join('')}</tr>`
+  const shown = rows.slice(1, MAX_CSV_ROWS + 1)
+  const note = clipped || rows.length - 1 > shown.length
+    ? `<p>showing first ${shown.length} rows — fetch the file directly (curl/wget) for all of it</p>` : ''
+  return page(
+    key.split('/').pop(),
+    `<table><thead>${tr(rows[0] || [], 'th')}</thead><tbody>${shown.map((r) => tr(r, 'td')).join('')}</tbody></table>${note}`,
+  )
+}
+
 // Returns a Response, or null when the key doesn't exist.
-async function render(key, env) {
+async function render(key, env, accept) {
   const ext = key.split('.').pop().toLowerCase()
+  // browsers navigating (Accept: text/html) get pretty views; fetch()/curl
+  // keep getting raw bytes so html shares can load their own data files
+  const wantsHtml = /text\/html/.test(accept || '')
+
   if (ext === 'md') {
     const md = await env.SHARES.get(key, 'text')
     if (md === null) return null
     const title = (md.match(/^#\s+(.+)$/m) || [, key])[1]
     return page(title, marked.parse(md))
   }
+
+  if (wantsHtml && ['json', 'jsonl', 'ndjson', 'csv'].includes(ext)) {
+    const text = await env.SHARES.get(key, 'text')
+    if (text === null) return null
+    if (ext === 'csv') return csvPage(key, text)
+    return codePage(key, prettyJson(text, ext), 'json')
+  }
+
   if (TYPES[ext]) {
     const body = await env.SHARES.get(key, 'stream')
     if (body === null) return null
@@ -303,23 +391,15 @@ async function render(key, env) {
     })
   }
 
-  // Unknown extension: text renders as a highlighted <pre> page; only
-  // genuinely binary content (null byte early on) falls back to download.
+  // Unknown extension: text renders as a highlighted <pre> page; binary
+  // content (null byte early on) and non-browser requests get raw bytes.
   const buf = await env.SHARES.get(key, 'arrayBuffer')
   if (buf === null) return null
-  if (new Uint8Array(buf, 0, Math.min(8192, buf.byteLength)).includes(0)) {
+  const binary = new Uint8Array(buf, 0, Math.min(8192, buf.byteLength)).includes(0)
+  if (binary || !wantsHtml) {
     return new Response(buf, {
       headers: { 'content-type': 'application/octet-stream', 'cache-control': 'private, no-cache' },
     })
   }
-  const lang = CODE_LANGS[ext]
-  return page(
-    key.split('/').pop(),
-    `<link rel="stylesheet" media="(prefers-color-scheme: light)" href="${HLJS}/styles/github.min.css">
-<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
-<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(new TextDecoder().decode(buf))}</code></pre>
-<script src="${HLJS}/highlight.min.js"></script>
-${lang ? `<script src="${HLJS}/languages/${lang}.min.js"></script>` : ''}
-<script>hljs.highlightAll()</script>`,
-  )
+  return codePage(key, new TextDecoder().decode(buf), CODE_LANGS[ext])
 }
