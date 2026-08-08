@@ -7,6 +7,7 @@
 // Swap the SHARES binding to an R2 bucket if those ceilings ever bite.
 
 import { marked } from 'marked'
+import { zipSync } from 'fflate'
 
 const SESSION_DAYS = 7
 
@@ -14,10 +15,12 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url)
 
-    // CLI endpoints: bearer token, no cookies involved.
+    // CLI endpoints: bearer token, no cookies involved. Bearer GET serves
+    // raw bytes (for `share download`); browsers never send one.
     const bearer = (req.headers.get('authorization') || '').replace(/^Bearer /, '')
     const tokenOk = env.UPLOAD_TOKEN && bearer === env.UPLOAD_TOKEN
-    if (req.method === 'PUT' || req.method === 'DELETE' || url.pathname === '/_list') {
+    if (req.method === 'PUT' || req.method === 'DELETE' || url.pathname === '/_list'
+        || (req.method === 'GET' && bearer)) {
       if (!tokenOk) return new Response('forbidden', { status: 403 })
       return cli(req, url, env)
     }
@@ -54,12 +57,20 @@ async function sharePrefixes(env) {
 
 async function cli(req, url, env) {
   if (url.pathname === '/_list') {
-    const tops = await sharePrefixes(env)
-    return new Response(tops.join('\n') + (tops.length ? '\n' : ''))
+    // ?prefix=slug/ lists every file in a share; bare _list lists share slugs
+    const prefix = url.searchParams.get('prefix')
+    const names = prefix ? await allKeys(env, prefix) : await sharePrefixes(env)
+    return new Response(names.join('\n') + (names.length ? '\n' : ''))
   }
 
   const key = decodeURIComponent(url.pathname.slice(1))
   if (!key) return new Response('missing key', { status: 400 })
+
+  if (req.method === 'GET') {
+    const body = await env.SHARES.get(key, 'stream')
+    if (body === null) return new Response('not found', { status: 404 })
+    return new Response(body)
+  }
 
   if (req.method === 'PUT') {
     await env.SHARES.put(key, await req.arrayBuffer())
@@ -269,6 +280,25 @@ async function serve(url, email, env, accept) {
     return page('shares', `<h1>shares (admin view)</h1><ul>${items.join('')}</ul>`)
   }
 
+  // /slug/_zip: whole share as a zip (in-memory; KV caps files at 25MB)
+  if (key.endsWith('/_zip')) {
+    const prefix = key.slice(0, -'_zip'.length)
+    const names = await allKeys(env, prefix)
+    if (!names.length) return notFound()
+    const files = {}
+    for (const n of names) {
+      files[n.slice(prefix.length)] = new Uint8Array(await env.SHARES.get(n, 'arrayBuffer'))
+    }
+    const base = prefix.replace(/\/$/, '').split('/').pop()
+    return new Response(zipSync(files), {
+      headers: {
+        'content-type': 'application/zip',
+        'content-disposition': `attachment; filename="${base}.zip"`,
+        'cache-control': 'private, no-cache',
+      },
+    })
+  }
+
   if (key.endsWith('/')) {
     for (const cand of [`${key}index.md`, `${key}index.html`]) {
       const hit = await render(cand, env, accept)
@@ -276,10 +306,13 @@ async function serve(url, email, env, accept) {
     }
     const names = await allKeys(env, key)
     if (!names.length) return notFound()
+    // one file -> skip the listing, land on the file itself
+    if (names.length === 1) return Response.redirect(`${url.origin}/${encodeURI(names[0])}`, 302)
     const items = names.map(
       (n) => `<li><a href="/${esc(n)}">${esc(n.slice(key.length))}</a></li>`,
     )
-    return page(key, `<h1>${esc(key.replace(/\/$/, ''))}</h1><ul>${items.join('')}</ul>`)
+    return page(key, `<h1>${esc(key.replace(/\/$/, ''))}</h1><ul>${items.join('')}</ul>
+<p><a href="/${esc(key)}_zip">download all (.zip)</a></p>`)
   }
 
   const hit = await render(key, env, accept)
