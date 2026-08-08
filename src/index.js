@@ -184,10 +184,20 @@ const TYPES = {
 
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
+// content fingerprint for the auto-refresh poll; djb2 is plenty for
+// "did it change" and keeps page() synchronous
+function vhash(s) {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = (h * 33 + s.charCodeAt(i)) >>> 0
+  return h.toString(36)
+}
+
 function page(title, body) {
+  const v = vhash(body)
   return new Response(
     `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
+<meta name="v" content="${v}">
 <style>
   body{max-width:52rem;margin:2rem auto;padding:0 1rem;font:16px/1.6 -apple-system,system-ui,sans-serif;color:#1f2328}
   /* pre/table break out of the 52rem prose column: as wide as content needs,
@@ -259,6 +269,16 @@ ${body}
     }
     pre.insertAdjacentElement('beforebegin', b)
   })
+  // auto-refresh: reload when a push changes the content fingerprint
+  setInterval(function () {
+    fetch(location.href, { cache: 'no-store' })
+      .then(function (r) { return r.text() })
+      .then(function (t) {
+        var m = t.match(/name="v" content="([^"]+)"/)
+        if (m && m[1] !== '${v}') location.reload()
+      })
+      .catch(function () {})
+  }, 15000)
 })()
 </script>`,
     { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache' } },
