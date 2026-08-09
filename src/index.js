@@ -99,6 +99,11 @@ async function cli(req, url, env, who) {
     return new Response(body)
   }
 
+  // _-prefixed top segments are reserved (the _own/ ownership keys live in
+  // KV; _list/_token/_cli/_peek/_zip are routes) -- writable slugs never
+  // start with _, or a crafted PUT /_own/<slug> could hijack ownership
+  if (key.startsWith('_')) return new Response('reserved\n', { status: 400 })
+
   // Writes only touch your own shares (admin can touch anything). Owner
   // lives in a dedicated _own/<slug> key: a KV *read* per PUT instead of a
   // list -- the free tier allows 1k lists/day but 100k reads. A missing
