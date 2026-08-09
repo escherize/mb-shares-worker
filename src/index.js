@@ -425,6 +425,9 @@ async function serve(url, email, env, accept) {
   #pv{display:none;position:fixed;z-index:10;max-width:44rem;max-height:45vh;overflow:hidden;
     background:var(--code-bg);border:1px solid var(--border);border-radius:6px;
     box-shadow:0 4px 16px rgba(0,0,0,.25);padding:.5rem .75rem}
+  /* invisible bridges above/below: crossing the row->card gap stays "inside" */
+  #pv::before{content:'';position:absolute;left:0;right:0;top:-14px;height:14px}
+  #pv::after{content:'';position:absolute;left:0;right:0;bottom:-14px;height:14px}
   #pv .f{color:var(--muted);font-size:.75rem;margin:0 3.5rem .25rem 0;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   #pv .c{position:absolute;top:.35rem;right:.4rem;font:inherit;font-size:.7rem;
@@ -455,8 +458,14 @@ var pv = document.createElement('div')
 pv.id = 'pv'
 pv.innerHTML = '<div class="f"></div><button class="c">copy</button><pre></pre>'
 document.body.appendChild(pv)
-var pvCache = {}, pvTimer = null, pvHide = null, pvCur = null
+var pvCache = {}, pvHide = null, pvCur = null
 function hidePv() { pv.style.display = 'none'; pvCur = null }
+function peek(u) {
+  return pvCache[u]
+    ? Promise.resolve(pvCache[u])
+    : fetch(u + '_peek').then(function (r) { return r.json() })
+        .then(function (j) { pvCache[u] = j; return j })
+}
 pv.addEventListener('mouseenter', function () { clearTimeout(pvHide) })
 pv.addEventListener('mouseleave', function () { pvHide = setTimeout(hidePv, 150) })
 pv.querySelector('.c').addEventListener('click', function () {
@@ -476,33 +485,40 @@ document.querySelectorAll('#shares tr').forEach(function (tr) {
   tr.addEventListener('mouseenter', function () {
     clearTimeout(pvHide)
     pvCur = u
-    pvTimer = setTimeout(function () {
-      var got = pvCache[u]
-        ? Promise.resolve(pvCache[u])
-        : fetch(u + '_peek').then(function (r) { return r.json() })
-            .then(function (j) { pvCache[u] = j; return j })
-      got.then(function (j) {
-        if (pvCur !== u) return
-        pv.querySelector('.f').textContent = j.file
-        pv.querySelector('pre').textContent = j.text
-        pv.dataset.u = u + j.file
-        var r = tr.getBoundingClientRect()
-        pv.style.left = Math.min(r.left + 24, innerWidth - 400) + 'px'
-        pv.style.display = 'block'
-        var below = innerHeight - r.bottom - 8
-        if (below < pv.offsetHeight && r.top > innerHeight / 2) {
-          pv.style.top = Math.max(4, r.top - pv.offsetHeight - 4) + 'px'
-        } else {
-          pv.style.top = (r.bottom + 4) + 'px'
-        }
-      }).catch(function () {})
-    }, 250)
+    peek(u).then(function (j) {
+      if (pvCur !== u) return
+      pv.querySelector('.f').textContent = j.file
+      pv.querySelector('pre').textContent = j.text
+      pv.dataset.u = u + j.file
+      var r = tr.getBoundingClientRect()
+      pv.style.left = Math.min(r.left + 24, innerWidth - 400) + 'px'
+      pv.style.display = 'block'
+      var below = innerHeight - r.bottom - 8
+      if (below < pv.offsetHeight && r.top > innerHeight / 2) {
+        pv.style.top = Math.max(4, r.top - pv.offsetHeight - 4) + 'px'
+      } else {
+        pv.style.top = (r.bottom + 4) + 'px'
+      }
+    }).catch(function () {})
   })
   tr.addEventListener('mouseleave', function () {
-    clearTimeout(pvTimer)
     pvHide = setTimeout(hidePv, 150)
   })
 })
+// warm the peek cache so hovers are instant (4 in flight at a time)
+var pvq = Array.prototype.map.call(
+  document.querySelectorAll('#shares td.s a'),
+  function (a) { return a.getAttribute('href') })
+var pvActive = 0
+function pvPump() {
+  while (pvq.length && pvActive < 4) {
+    (function (u) {
+      pvActive++
+      peek(u).catch(function () {}).then(function () { pvActive--; pvPump() })
+    })(pvq.shift())
+  }
+}
+pvPump()
 </script>`, { vsrc: JSON.stringify(sorted) })
   }
 
