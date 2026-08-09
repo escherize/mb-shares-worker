@@ -36,15 +36,19 @@ export default {
 
 // ---------- KV helpers ----------
 
-async function allKeys(env, prefix) {
-  const names = []
+async function allEntries(env, prefix) {
+  const out = []
   let cursor
   do {
     const l = await env.SHARES.list({ prefix, cursor })
-    names.push(...l.keys.map((k) => k.name))
+    out.push(...l.keys)
     cursor = l.list_complete ? undefined : l.cursor
   } while (cursor)
-  return names
+  return out
+}
+
+async function allKeys(env, prefix) {
+  return (await allEntries(env, prefix)).map((k) => k.name)
 }
 
 async function sharePrefixes(env) {
@@ -73,7 +77,8 @@ async function cli(req, url, env) {
   }
 
   if (req.method === 'PUT') {
-    await env.SHARES.put(key, await req.arrayBuffer())
+    // timestamp feeds the admin listing's newest-first sort
+    await env.SHARES.put(key, await req.arrayBuffer(), { metadata: { t: Date.now() } })
     return new Response('ok\n')
   }
 
@@ -215,6 +220,7 @@ function page(title, body) {
   img{max-width:100%}
   a{color:#0969da}
   blockquote{border-left:4px solid #d1d9e0;margin-left:0;padding-left:1rem;color:#59636e}
+  small{color:#59636e}
   table{border-collapse:collapse}td,th{border:1px solid #d1d9e0;padding:.3em .7em}
   .anchor{opacity:0;margin-right:.35em;text-decoration:none}
   :hover>.anchor{opacity:1}
@@ -223,6 +229,7 @@ function page(title, body) {
     body{background:#0d1117;color:#e6edf3}
     pre,code{background:#161b22}
     table{background:none}
+    small{color:#8b949e}
     a{color:#4493f8}
     :target{background:#3a3000}
     button.copy{color:#8b949e;border-color:#30363d}
@@ -316,10 +323,31 @@ async function serve(url, email, env, accept) {
     if (email !== env.ADMIN_EMAIL) {
       return page('mb-shares', '<h1>mb-shares</h1><p>Nothing here. If someone meant for you to see something, they sent you a direct link.</p>')
     }
-    const items = (await sharePrefixes(env)).map(
-      (p) => `<li><a href="/${esc(p)}/">${esc(p)}</a></li>`,
-    )
-    return page('shares', `<h1>shares (admin view)</h1><ul>${items.join('')}</ul>`)
+    const shares = new Map()
+    for (const k of await allEntries(env)) {
+      const top = k.name.split('/')[0]
+      const s = shares.get(top) || { n: 0, t: 0 }
+      s.n += 1
+      s.t = Math.max(s.t, k.metadata?.t || 0)
+      shares.set(top, s)
+    }
+    // newest first; pre-timestamp shares (no metadata) sink to the bottom
+    const sorted = [...shares].sort((a, b) => b[1].t - a[1].t || a[0].localeCompare(b[0]))
+    const items = sorted.map(([p, s]) =>
+      `<li><a href="/${esc(p)}/">${esc(p)}</a> <small>${s.n} file${s.n === 1 ? '' : 's'}${
+        s.t ? ' · ' + new Date(s.t).toISOString().slice(0, 10) : ''}</small></li>`)
+    return page('shares', `<h1>shares (admin view)</h1>
+<input id="q" placeholder="filter" autofocus
+  style="width:100%;box-sizing:border-box;padding:.4em .6em;font:inherit;margin-bottom:.5rem">
+<ul id="shares">${items.join('')}</ul>
+<script>
+document.getElementById('q').addEventListener('input', function () {
+  var q = this.value.toLowerCase()
+  document.querySelectorAll('#shares li').forEach(function (li) {
+    li.style.display = li.textContent.toLowerCase().indexOf(q) === -1 ? 'none' : ''
+  })
+})
+</script>`)
   }
 
   // /slug/_zip: whole share as a zip (in-memory; KV caps files at 25MB)
