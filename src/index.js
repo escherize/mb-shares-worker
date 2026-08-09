@@ -55,10 +55,11 @@ async function allKeys(env, prefix) {
 
 // top-level slugs -> { n: file count, t: newest timestamp, o: owner email }.
 // Files published before multi-user carry no owner; callers treat a missing
-// o as ADMIN_EMAIL.
+// o as ADMIN_EMAIL. Skips the _own/ bookkeeping keys.
 async function shareTops(env) {
   const tops = new Map()
   for (const k of await allEntries(env)) {
+    if (k.name.startsWith('_own/')) continue
     const top = k.name.split('/')[0]
     const s = tops.get(top) || { n: 0, t: 0, o: undefined }
     s.n += 1
@@ -67,14 +68,6 @@ async function shareTops(env) {
     tops.set(top, s)
   }
   return tops
-}
-
-// Owner of one share via a limit-1 list; null when the share doesn't exist.
-// KV list is eventually consistent (~60s), so two users racing to claim the
-// same brand-new slug could interleave -- random slug suffixes make that moot.
-async function shareOwner(env, top) {
-  const l = await env.SHARES.list({ prefix: `${top}/`, limit: 1 })
-  return l.keys.length ? (l.keys[0].metadata?.o || env.ADMIN_EMAIL) : null
 }
 
 // ---------- CLI (bearer token) ----------
@@ -106,14 +99,23 @@ async function cli(req, url, env, who) {
     return new Response(body)
   }
 
-  // writes only touch your own shares (admin can touch anything)
-  const owner = await shareOwner(env, key.replace(/\/.*$/, ''))
+  // Writes only touch your own shares (admin can touch anything). Owner
+  // lives in a dedicated _own/<slug> key: a KV *read* per PUT instead of a
+  // list -- the free tier allows 1k lists/day but 100k reads. A missing
+  // _own key means the slug is unclaimed (every existing share got one
+  // backfilled); the first PUT claims it. Racers on the same fresh slug are
+  // moot: random suffixes.
+  const top = key.replace(/\/.*$/, '')
+  const ownKey = `_own/${top}`
+  const owner = await env.SHARES.get(ownKey)
+
   if (owner && owner !== who && !admin) {
     return new Response(`owned by ${owner}\n`, { status: 403 })
   }
 
   if (req.method === 'PUT') {
-    // timestamp feeds the listing's newest-first sort; o drives ownership
+    if (!owner) await env.SHARES.put(ownKey, who)
+    // timestamp feeds the listing's newest-first sort; o shows in admin view
     await env.SHARES.put(key, await req.arrayBuffer(), { metadata: { t: Date.now(), o: who } })
     return new Response('ok\n')
   }
@@ -121,6 +123,7 @@ async function cli(req, url, env, who) {
   // DELETE /name/ removes every object under the prefix
   const names = await allKeys(env, key)
   await Promise.all(names.map((n) => env.SHARES.delete(n)))
+  await env.SHARES.delete(ownKey)
   return new Response(`deleted ${names.length}\n`)
 }
 
@@ -251,6 +254,8 @@ function vhash(s) {
 // Pages with time-relative text pass stable data instead to avoid a
 // fingerprint that changes every render (= infinite reload loop).
 // opts.copy: show the fixed top-right button that copies the raw file.
+// opts.poll: false disables the auto-refresh poll -- the listing page must
+// not re-render itself every 15s (each render costs a KV list; 1k/day cap).
 function page(title, body, opts = {}) {
   const v = vhash(opts.vsrc || body)
   return new Response(
@@ -403,7 +408,7 @@ ${body}
       .catch(function () {})
   })
   // auto-refresh: reload when a push changes the content fingerprint
-  setInterval(function () {
+  ${opts.poll === false ? '' : `setInterval(function () {
     fetch(location.href, { cache: 'no-store' })
       .then(function (r) { return r.text() })
       .then(function (t) {
@@ -411,7 +416,7 @@ ${body}
         if (m && m[1] !== '${v}') location.reload()
       })
       .catch(function () {})
-  }, 15000)
+  }, 15000)`}
 })()
 </script>`,
     { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache' } },
@@ -567,7 +572,7 @@ function pvPump() {
   }
 }
 pvPump()
-</script>`, { vsrc: JSON.stringify(sorted) })
+</script>`, { vsrc: JSON.stringify(sorted), poll: false })
   }
 
   // /_token: personal CLI token + setup, derived from the signed-in session

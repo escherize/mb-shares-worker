@@ -26,6 +26,7 @@ usage: share [-e] <file-or-dir> [name]   publish (new slug w/ random suffix)
        share rm <url-or-slug>            delete a share
        share download <url-or-slug> [dest]  pull a share's files into dest/ (default: slug/)
        share cat <url-or-slug>[/file]    print share contents to stdout (URL ok as-is)
+       share ls <url-or-slug>            list files in a share
        share                             list all shares
 
 examples:
@@ -53,6 +54,12 @@ EOF
   rm)
     slug="$(deslug "${2:?usage: share rm <slug>}")"
     auth -X DELETE "$BASE_URL/$(enc "$slug")/"
+    exit 0 ;;
+  ls)
+    slug="$(deslug "${2:?usage: share ls <url-or-slug>}")"
+    out="$(auth "$BASE_URL/_list?prefix=$(enc "$slug/")" || true)"
+    [ -n "$out" ] || { echo "no share '$slug' (run \`share\` to list)" >&2; exit 1; }
+    while IFS= read -r k; do printf '%s\n' "${k#"$slug"/}"; done <<< "$out"
     exit 0 ;;
   cat)
     arg="$(deslug "${2:?usage: share cat <url-or-slug>[/file]}")"
