@@ -82,6 +82,7 @@ async function cli(req, url, env, who) {
     // ?prefix=slug/ lists every file in a share (any token -- download works
     // on anything you can view); bare _list lists your own share slugs
     const prefix = url.searchParams.get('prefix')
+    if (prefix?.startsWith('_')) return new Response('reserved\n', { status: 400 })
     const names = prefix
       ? await allKeys(env, prefix)
       : [...await shareTops(env)]
@@ -93,16 +94,17 @@ async function cli(req, url, env, who) {
   const key = decodeURIComponent(url.pathname.slice(1))
   if (!key) return new Response('missing key', { status: 400 })
 
+  // _-prefixed top segments are reserved (the _own/ ownership keys live in
+  // KV; _list/_token/_cli/_peek/_zip are routes). Reads AND writes: a PUT
+  // to /_own/<slug> could hijack ownership, a GET/list under _own/ would
+  // enumerate every slug (share URLs are meant to be unguessable).
+  if (key.startsWith('_')) return new Response('reserved\n', { status: 400 })
+
   if (req.method === 'GET') {
     const body = await env.SHARES.get(key, 'stream')
     if (body === null) return new Response('not found', { status: 404 })
     return new Response(body)
   }
-
-  // _-prefixed top segments are reserved (the _own/ ownership keys live in
-  // KV; _list/_token/_cli/_peek/_zip are routes) -- writable slugs never
-  // start with _, or a crafted PUT /_own/<slug> could hijack ownership
-  if (key.startsWith('_')) return new Response('reserved\n', { status: 400 })
 
   // Writes only touch your own shares (admin can touch anything). Owner
   // lives in a dedicated _own/<slug> key: a KV *read* per PUT instead of a
@@ -635,6 +637,9 @@ EOF`
       },
     })
   }
+
+  // reserved namespace: /_own/... must not render or list (slug enumeration)
+  if (key.startsWith('_')) return notFound()
 
   if (key.endsWith('/')) {
     for (const cand of [`${key}index.md`, `${key}index.html`]) {
