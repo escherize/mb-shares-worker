@@ -229,7 +229,10 @@ function page(title, body) {
     button.copy:hover{color:#e6edf3;border-color:#8b949e}
   }
 </style>
+<link rel="stylesheet" media="(prefers-color-scheme: light)" href="${HLJS}/styles/github.min.css">
+<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
 ${body}
+<script src="${HLJS}/highlight.min.js"></script>
 <script>
 (function () {
   var used = new Set(Array.from(document.querySelectorAll('[id]'), function (e) { return e.id }))
@@ -269,6 +272,25 @@ ${body}
     }
     pre.insertAdjacentElement('beforebegin', b)
   })
+  // highlight: load grammars for declared fence languages (clojure always,
+  // for auto-detecting unlabeled blocks - it is not in the common build)
+  var ALIAS = ${JSON.stringify(CODE_LANGS)}
+  var need = { clojure: true }
+  document.querySelectorAll('code[class*="language-"]').forEach(function (c) {
+    var m = c.className.match(/language-([\\w-]+)/)
+    if (m) need[ALIAS[m[1]] || m[1]] = true
+  })
+  var pending = 0
+  function done() { if (--pending === 0) hljs.highlightAll() }
+  Object.keys(need).forEach(function (l) {
+    if (hljs.getLanguage(l)) return
+    pending++
+    var s = document.createElement('script')
+    s.src = '${HLJS}/languages/' + l + '.min.js'
+    s.onload = s.onerror = done
+    document.head.appendChild(s)
+  })
+  if (!pending) hljs.highlightAll()
   // auto-refresh: reload when a push changes the content fingerprint
   setInterval(function () {
     fetch(location.href, { cache: 'no-store' })
@@ -360,14 +382,10 @@ const CODE_LANGS = {
 const HLJS = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1'
 
 function codePage(key, text, lang) {
+  // page() carries hljs for all rendered pages; the class is enough
   return page(
     key.split('/').pop(),
-    `<link rel="stylesheet" media="(prefers-color-scheme: light)" href="${HLJS}/styles/github.min.css">
-<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
-<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(text)}</code></pre>
-<script src="${HLJS}/highlight.min.js"></script>
-${lang ? `<script src="${HLJS}/languages/${lang}.min.js"></script>` : ''}
-<script>hljs.highlightAll()</script>`,
+    `<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(text)}</code></pre>`,
   )
 }
 
