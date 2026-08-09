@@ -2,6 +2,11 @@ name = "mb-shares"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
 
+# bundle bin/share as text so the worker can serve it at /_cli
+[[rules]]
+type = "Text"
+globs = ["**/bin/share"]
+
 [[kv_namespaces]]
 binding = "SHARES"
 id = "8e746d88c3254e1b83b82eb02db9be0c"
@@ -15,4 +20,4 @@ ADMIN_EMAIL = "bryan@metabase.com"
 # secrets (set via: bun x wrangler secret put <NAME>):
 #   GOOGLE_CLIENT_SECRET  -- from the Google OAuth client
 #   SESSION_SECRET        -- random, signs session cookies
-#   UPLOAD_TOKEN          -- random, authorizes the `share` CLI
+#   UPLOAD_TOKEN          -- random, legacy admin CLI token (others mint theirs at /_token)

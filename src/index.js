@@ -1,13 +1,15 @@
 // mb-shares worker: private gist-like over Workers KV.
 // Viewers authenticate with Google (only verified @ALLOWED_DOMAIN accounts);
-// the `share` CLI publishes with a bearer token. No public listing: `/` is
-// blank except for ADMIN_EMAIL; share slugs carry a random suffix.
+// the `share` CLI publishes with a bearer token. Every user gets their own
+// token (minted at /_token) and sees only their own shares at `/`;
+// ADMIN_EMAIL sees everything. Share slugs carry a random suffix.
 //
 // ponytail: KV free tier (1GB total, 25MB/file, ~60s global propagation).
 // Swap the SHARES binding to an R2 bucket if those ceilings ever bite.
 
 import { marked } from 'marked'
 import { zipSync } from 'fflate'
+import CLI_SH from '../bin/share' // text module (wrangler.toml rules), served at /_cli
 
 const SESSION_DAYS = 7
 
@@ -18,11 +20,11 @@ export default {
     // CLI endpoints: bearer token, no cookies involved. Bearer GET serves
     // raw bytes (for `share download`); browsers never send one.
     const bearer = (req.headers.get('authorization') || '').replace(/^Bearer /, '')
-    const tokenOk = env.UPLOAD_TOKEN && bearer === env.UPLOAD_TOKEN
     if (req.method === 'PUT' || req.method === 'DELETE' || url.pathname === '/_list'
         || (req.method === 'GET' && bearer)) {
-      if (!tokenOk) return new Response('forbidden', { status: 403 })
-      return cli(req, url, env)
+      const who = await tokenEmail(env, bearer)
+      if (!who) return new Response('forbidden', { status: 403 })
+      return cli(req, url, env, who)
     }
 
     if (url.pathname === '/auth/callback') return handleCallback(url, env)
@@ -51,19 +53,47 @@ async function allKeys(env, prefix) {
   return (await allEntries(env, prefix)).map((k) => k.name)
 }
 
-async function sharePrefixes(env) {
-  const tops = new Set()
-  for (const name of await allKeys(env)) tops.add(name.split('/')[0])
-  return [...tops].sort()
+// top-level slugs -> { n: file count, t: newest timestamp, o: owner email }.
+// Files published before multi-user carry no owner; callers treat a missing
+// o as ADMIN_EMAIL.
+async function shareTops(env) {
+  const tops = new Map()
+  for (const k of await allEntries(env)) {
+    const top = k.name.split('/')[0]
+    const s = tops.get(top) || { n: 0, t: 0, o: undefined }
+    s.n += 1
+    s.t = Math.max(s.t, k.metadata?.t || 0)
+    s.o = s.o || k.metadata?.o
+    tops.set(top, s)
+  }
+  return tops
+}
+
+// Owner of one share via a limit-1 list; null when the share doesn't exist.
+// KV list is eventually consistent (~60s), so two users racing to claim the
+// same brand-new slug could interleave -- random slug suffixes make that moot.
+async function shareOwner(env, top) {
+  const l = await env.SHARES.list({ prefix: `${top}/`, limit: 1 })
+  return l.keys.length ? (l.keys[0].metadata?.o || env.ADMIN_EMAIL) : null
 }
 
 // ---------- CLI (bearer token) ----------
 
-async function cli(req, url, env) {
+async function cli(req, url, env, who) {
+  const admin = who === env.ADMIN_EMAIL
+
+  // the share script itself, for one-line install from the /_token page
+  if (url.pathname === '/_cli') return new Response(CLI_SH)
+
   if (url.pathname === '/_list') {
-    // ?prefix=slug/ lists every file in a share; bare _list lists share slugs
+    // ?prefix=slug/ lists every file in a share (any token -- download works
+    // on anything you can view); bare _list lists your own share slugs
     const prefix = url.searchParams.get('prefix')
-    const names = prefix ? await allKeys(env, prefix) : await sharePrefixes(env)
+    const names = prefix
+      ? await allKeys(env, prefix)
+      : [...await shareTops(env)]
+          .filter(([, s]) => admin || (s.o || env.ADMIN_EMAIL) === who)
+          .map(([top]) => top).sort()
     return new Response(names.join('\n') + (names.length ? '\n' : ''))
   }
 
@@ -76,9 +106,15 @@ async function cli(req, url, env) {
     return new Response(body)
   }
 
+  // writes only touch your own shares (admin can touch anything)
+  const owner = await shareOwner(env, key.replace(/\/.*$/, ''))
+  if (owner && owner !== who && !admin) {
+    return new Response(`owned by ${owner}\n`, { status: 403 })
+  }
+
   if (req.method === 'PUT') {
-    // timestamp feeds the admin listing's newest-first sort
-    await env.SHARES.put(key, await req.arrayBuffer(), { metadata: { t: Date.now() } })
+    // timestamp feeds the listing's newest-first sort; o drives ownership
+    await env.SHARES.put(key, await req.arrayBuffer(), { metadata: { t: Date.now(), o: who } })
     return new Response('ok\n')
   }
 
@@ -101,6 +137,20 @@ async function hmac(env, data) {
     { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   )
   return b64url(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data)))
+}
+
+// Personal CLI tokens are stateless: t.<emailB64>.<hmac("tok."+emailB64)>.
+// Verification recomputes the hmac -- nothing stored, nothing to revoke short
+// of rotating SESSION_SECRET. The "tok." prefix keeps tokens and session
+// cookies from doubling as each other despite the shared secret. The legacy
+// shared UPLOAD_TOKEN still works and acts as ADMIN_EMAIL.
+async function tokenEmail(env, bearer) {
+  if (!bearer) return null
+  if (env.UPLOAD_TOKEN && bearer === env.UPLOAD_TOKEN) return env.ADMIN_EMAIL
+  const [tag, emailB64, sig] = bearer.split('.')
+  if (tag !== 't' || !emailB64 || !sig) return null
+  if (sig !== await hmac(env, `tok.${emailB64}`)) return null
+  try { return atob(emailB64.replace(/-/g, '+').replace(/_/g, '/')) } catch { return null }
 }
 
 async function sessionEmail(req, env) {
@@ -386,21 +436,16 @@ async function serve(url, email, env, accept) {
   const key = decodeURIComponent(url.pathname.slice(1))
 
   if (key === '') {
-    if (email !== env.ADMIN_EMAIL) {
-      return page('mb-shares', '<h1>mb-shares</h1><p>Nothing here. If someone meant for you to see something, they sent you a direct link.</p>')
-    }
-    const shares = new Map()
-    for (const k of await allEntries(env)) {
-      const top = k.name.split('/')[0]
-      const s = shares.get(top) || { n: 0, t: 0 }
-      s.n += 1
-      s.t = Math.max(s.t, k.metadata?.t || 0)
-      shares.set(top, s)
-    }
+    const admin = email === env.ADMIN_EMAIL
+    // you see your shares; admin sees everyone's (with an owner column)
+    const mine = [...await shareTops(env)]
+      .filter(([, s]) => admin || (s.o || env.ADMIN_EMAIL) === email)
     // newest first; pre-timestamp shares (no metadata) sink to the bottom
-    const sorted = [...shares].sort((a, b) => b[1].t - a[1].t || a[0].localeCompare(b[0]))
+    const sorted = mine.sort((a, b) => b[1].t - a[1].t || a[0].localeCompare(b[0]))
     const rows = sorted.map(([p, s]) =>
-      `<tr><td class="s"><a href="/${esc(p)}/">${esc(p)}</a></td><td class="n">${s.n} file${
+      `<tr><td class="s"><a href="/${esc(p)}/">${esc(p)}</a></td>${
+        admin ? `<td class="o">${esc((s.o || env.ADMIN_EMAIL).split('@')[0])}</td>` : ''
+      }<td class="n">${s.n} file${
         s.n === 1 ? '' : 's'}</td><td class="t" title="${
         s.t ? new Date(s.t).toISOString() : 'published before timestamps existed'}">${
         ago(s.t)}</td><td><button data-u="/${esc(p)}/">url</button></td></tr>`)
@@ -417,6 +462,7 @@ async function serve(url, email, env, accept) {
   .lst td.s a{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem;
     text-decoration:none}
   .lst td.s a:hover{text-decoration:underline}
+  .lst td.o{color:var(--muted)}
   .lst td.n{color:var(--acc1);text-align:right}
   .lst td.t{color:var(--acc2)}
   .lst button{font:inherit;font-size:.7rem;color:var(--muted);background:none;
@@ -440,6 +486,8 @@ async function serve(url, email, env, accept) {
 <div class="hd"><h1>shares</h1></div>
 <input id="q" placeholder="filter" autofocus>
 <table class="lst"><tbody id="shares">${rows.join('')}</tbody></table>
+${rows.length ? '' : '<p>No shares yet.</p>'}
+<p><small><a href="/_token">cli setup</a></small></p>
 <script>
 document.getElementById('q').addEventListener('input', function () {
   var q = this.value.toLowerCase()
@@ -520,6 +568,24 @@ function pvPump() {
 }
 pvPump()
 </script>`, { vsrc: JSON.stringify(sorted) })
+  }
+
+  // /_token: personal CLI token + setup, derived from the signed-in session
+  if (key === '_token') {
+    const emailB64 = b64url(new TextEncoder().encode(email))
+    const token = `t.${emailB64}.${await hmac(env, `tok.${emailB64}`)}`
+    const conf = `mkdir -p ~/.config/mb-shares
+cat > ~/.config/mb-shares/env <<'EOF'
+BASE_URL=${url.origin}
+UPLOAD_TOKEN=${token}
+EOF`
+    const install = `curl -sH "Authorization: Bearer ${token}" ${url.origin}/_cli -o ~/bin/share && chmod +x ~/bin/share`
+    return page('cli setup', `<h1>cli setup</h1>
+<p>Personal upload token for <code>${esc(email)}</code>. Save the config:</p>
+<pre><code>${esc(conf)}</code></pre>
+<p>Install the <code>share</code> script (needs <code>~/bin</code> on your PATH):</p>
+<pre><code>${esc(install)}</code></pre>
+<p>Then publish anything: <code>share thing.md</code> prints a URL. <code>share -h</code> for the rest.</p>`)
   }
 
   // /slug/_peek: first lines of the share's main file, for hover previews

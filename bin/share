@@ -38,6 +38,8 @@ related:
   ggc-gist / ggcp-gist             old public-gist versions (outside-org sharing)
 
 Viewers need a @metabase.com Google login; URLs are safe to paste anywhere.
+First-time setup: sign in at the share site and visit /_token for your
+personal token, config snippet, and a copy of this script.
 EOF
     exit 0 ;;
   rm)
