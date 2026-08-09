@@ -6,6 +6,7 @@ compatibility_date = "2026-08-01"
 [[rules]]
 type = "Text"
 globs = ["**/bin/share"]
+fallthrough = true
 
 [[kv_namespaces]]
 binding = "SHARES"
