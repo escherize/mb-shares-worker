@@ -197,47 +197,53 @@ function vhash(s) {
   return h.toString(36)
 }
 
-function page(title, body) {
-  const v = vhash(body)
+// vsrc: what the auto-refresh fingerprint hashes; defaults to the body.
+// Pages with time-relative text pass stable data instead to avoid a
+// fingerprint that changes every render (= infinite reload loop).
+function page(title, body, vsrc) {
+  const v = vhash(vsrc || body)
   return new Response(
     `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
 <meta name="v" content="${v}">
+<script>try{var _t=localStorage.getItem('theme');if(_t)document.documentElement.setAttribute('data-theme',_t)}catch(e){}</script>
 <style>
-  body{max-width:52rem;margin:2rem auto;padding:0 1rem;font:16px/1.6 -apple-system,system-ui,sans-serif;color:#1f2328}
+  :root{--bg:#fff;--fg:#1f2328;--muted:#59636e;--link:#0969da;--border:#d1d9e0;
+    --code-bg:#f6f8fa;--acc1:#953800;--acc2:#1a7f37;--target:#fff8c5}
+  @media (prefers-color-scheme: dark){:root:not([data-theme=light]){--bg:#0d1117;--fg:#e6edf3;
+    --muted:#8b949e;--link:#4493f8;--border:#30363d;--code-bg:#161b22;
+    --acc1:#ffa657;--acc2:#7ee787;--target:#3a3000}}
+  :root[data-theme=dark]{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--link:#4493f8;
+    --border:#30363d;--code-bg:#161b22;--acc1:#ffa657;--acc2:#7ee787;--target:#3a3000}
+  :root[data-theme=tokyo]{--bg:#1a1b26;--fg:#c0caf5;--muted:#565f89;--link:#7aa2f7;
+    --border:#292e42;--code-bg:#16161e;--acc1:#ff9e64;--acc2:#9ece6a;--target:#33301f}
+  :root[data-theme=nord]{--bg:#2e3440;--fg:#d8dee9;--muted:#8492ab;--link:#88c0d0;
+    --border:#3b4252;--code-bg:#3b4252;--acc1:#d08770;--acc2:#a3be8c;--target:#4c566a}
+  body{max-width:52rem;margin:2rem auto;padding:0 1rem;font:16px/1.6 -apple-system,system-ui,sans-serif;
+    background:var(--bg);color:var(--fg)}
   /* pre/table break out of the 52rem prose column: as wide as content needs,
      capped at the viewport, centered; overflow-x scrolls only past that */
-  pre,table{background:#f6f8fa;padding:1rem;border-radius:6px;overflow-x:auto;
+  pre,table{background:var(--code-bg);padding:1rem;border-radius:6px;overflow-x:auto;
       box-sizing:border-box;width:fit-content;min-width:100%;
       max-width:calc(100vw - 2rem);position:relative;left:50%;transform:translateX(-50%)}
   table{display:block;background:none;padding:0}
   button.copy{display:block;margin:0 0 .25rem auto;font:inherit;font-size:.75rem;
-      color:#59636e;background:none;border:1px solid #d1d9e0;border-radius:6px;
+      color:var(--muted);background:none;border:1px solid var(--border);border-radius:6px;
       padding:.1em .6em;cursor:pointer}
-  button.copy:hover{color:#1f2328;border-color:#8b949e}
-  code{background:#f6f8fa;padding:.15em .35em;border-radius:4px;font-size:.9em}
+  button.copy:hover{color:var(--fg);border-color:var(--muted)}
+  code{background:var(--code-bg);padding:.15em .35em;border-radius:4px;font-size:.9em}
   pre code{background:none;padding:0}
   img{max-width:100%}
-  a{color:#0969da}
-  blockquote{border-left:4px solid #d1d9e0;margin-left:0;padding-left:1rem;color:#59636e}
-  small{color:#59636e}
-  table{border-collapse:collapse}td,th{border:1px solid #d1d9e0;padding:.3em .7em}
+  a{color:var(--link)}
+  blockquote{border-left:4px solid var(--border);margin-left:0;padding-left:1rem;color:var(--muted)}
+  small{color:var(--muted)}
+  table{border-collapse:collapse}td,th{border:1px solid var(--border);padding:.3em .7em}
   .anchor{opacity:0;margin-right:.35em;text-decoration:none}
   :hover>.anchor{opacity:1}
-  :target{background:#fff8c5}
-  @media (prefers-color-scheme: dark){
-    body{background:#0d1117;color:#e6edf3}
-    pre,code{background:#161b22}
-    table{background:none}
-    small{color:#8b949e}
-    a{color:#4493f8}
-    :target{background:#3a3000}
-    button.copy{color:#8b949e;border-color:#30363d}
-    button.copy:hover{color:#e6edf3;border-color:#8b949e}
-  }
+  :target{background:var(--target)}
 </style>
-<link rel="stylesheet" media="(prefers-color-scheme: light)" href="${HLJS}/styles/github.min.css">
-<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
+<link rel="stylesheet" data-hl media="(prefers-color-scheme: light)" href="${HLJS}/styles/github.min.css">
+<link rel="stylesheet" data-hl media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
 ${body}
 <script src="${HLJS}/highlight.min.js"></script>
 <script>
@@ -279,6 +285,17 @@ ${body}
     }
     pre.insertAdjacentElement('beforebegin', b)
   })
+  // explicit theme replaces the auto (media-query) hljs stylesheets
+  var THL = { light: 'github', dark: 'github-dark', tokyo: 'tokyo-night-dark', nord: 'nord' }
+  var tname = ''
+  try { tname = localStorage.getItem('theme') || '' } catch (e) {}
+  if (THL[tname]) {
+    document.querySelectorAll('link[data-hl]').forEach(function (l) { l.remove() })
+    var hlink = document.createElement('link')
+    hlink.rel = 'stylesheet'
+    hlink.href = '${HLJS}/styles/' + THL[tname] + '.min.css'
+    document.head.appendChild(hlink)
+  }
   // highlight: load grammars for declared fence languages (clojure always,
   // for auto-detecting unlabeled blocks - it is not in the common build)
   var ALIAS = ${JSON.stringify(CODE_LANGS)}
@@ -316,6 +333,18 @@ ${body}
 
 const notFound = () => page('not found', '<h1>404</h1>')
 
+function ago(t) {
+  if (!t) return '—'
+  const m = Math.floor((Date.now() - t) / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}min ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}hr ${m % 60}min ago`
+  const d = Math.floor(h / 24)
+  if (d < 7) return `${d}d ${h % 24}hr ago`
+  return new Date(t).toISOString().slice(0, 10)
+}
+
 async function serve(url, email, env, accept) {
   const key = decodeURIComponent(url.pathname.slice(1))
 
@@ -333,21 +362,59 @@ async function serve(url, email, env, accept) {
     }
     // newest first; pre-timestamp shares (no metadata) sink to the bottom
     const sorted = [...shares].sort((a, b) => b[1].t - a[1].t || a[0].localeCompare(b[0]))
-    const items = sorted.map(([p, s]) =>
-      `<li><a href="/${esc(p)}/">${esc(p)}</a> <small>${s.n} file${s.n === 1 ? '' : 's'}${
-        s.t ? ' · ' + new Date(s.t).toISOString().slice(0, 10) : ''}</small></li>`)
-    return page('shares', `<h1>shares (admin view)</h1>
-<input id="q" placeholder="filter" autofocus
-  style="width:100%;box-sizing:border-box;padding:.4em .6em;font:inherit;margin-bottom:.5rem">
-<ul id="shares">${items.join('')}</ul>
+    const rows = sorted.map(([p, s]) =>
+      `<tr><td class="s"><a href="/${esc(p)}/">${esc(p)}</a></td><td class="n">${s.n} file${
+        s.n === 1 ? '' : 's'}</td><td class="t" title="${
+        s.t ? new Date(s.t).toISOString() : 'published before timestamps existed'}">${
+        ago(s.t)}</td><td><button data-u="/${esc(p)}/">url</button></td></tr>`)
+    return page('shares', `<style>
+  .hd{display:flex;align-items:baseline;gap:1rem;margin-bottom:.5rem}
+  .hd h1{margin:0;font-size:1.3rem;flex:1}
+  #th{font:inherit;font-size:.8rem;background:var(--code-bg);color:var(--fg);
+    border:1px solid var(--border);border-radius:6px;padding:.15em .4em}
+  #q{width:100%;box-sizing:border-box;font:inherit;font-size:.9rem;padding:.35em .6em;
+    background:var(--code-bg);color:var(--fg);border:1px solid var(--border);
+    border-radius:6px;margin:0 0 .75rem}
+  #q:focus{outline:2px solid var(--link);outline-offset:-1px}
+  table.lst{display:table;width:100%;min-width:0;max-width:none;left:auto;transform:none;
+    background:none;padding:0;font-size:.9rem}
+  .lst td{border:0;border-bottom:1px solid var(--border);padding:.3em .4em;white-space:nowrap}
+  .lst td.s{width:100%;white-space:normal}
+  .lst td.s a{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem;
+    text-decoration:none}
+  .lst td.s a:hover{text-decoration:underline}
+  .lst td.n{color:var(--acc1);text-align:right}
+  .lst td.t{color:var(--acc2)}
+  .lst button{font:inherit;font-size:.7rem;color:var(--muted);background:none;
+    border:1px solid var(--border);border-radius:5px;padding:.05em .45em;cursor:pointer}
+  .lst button:hover{color:var(--fg);border-color:var(--muted)}
+</style>
+<div class="hd"><h1>shares</h1><select id="th" title="theme">
+<option value="">auto</option><option value="light">light</option><option value="dark">dark</option>
+<option value="tokyo">tokyo</option><option value="nord">nord</option></select></div>
+<input id="q" placeholder="filter" autofocus>
+<table class="lst"><tbody id="shares">${rows.join('')}</tbody></table>
 <script>
 document.getElementById('q').addEventListener('input', function () {
   var q = this.value.toLowerCase()
-  document.querySelectorAll('#shares li').forEach(function (li) {
-    li.style.display = li.textContent.toLowerCase().indexOf(q) === -1 ? 'none' : ''
+  document.querySelectorAll('#shares tr').forEach(function (tr) {
+    tr.style.display = tr.textContent.toLowerCase().indexOf(q) === -1 ? 'none' : ''
   })
 })
-</script>`)
+var th = document.getElementById('th')
+try { th.value = localStorage.getItem('theme') || '' } catch (e) {}
+th.addEventListener('change', function () {
+  try { localStorage.setItem('theme', th.value) } catch (e) {}
+  location.reload()
+})
+document.querySelectorAll('.lst button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    navigator.clipboard.writeText(location.origin + b.getAttribute('data-u')).then(function () {
+      b.textContent = 'ok'; setTimeout(function () { b.textContent = 'url' }, 900)
+    })
+  })
+})
+</script>`, JSON.stringify(sorted))
   }
 
   // /slug/_zip: whole share as a zip (in-memory; KV caps files at 25MB)
