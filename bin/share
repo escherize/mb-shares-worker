@@ -10,6 +10,12 @@ CONF="$HOME/.config/mb-shares/env"
 
 auth() { curl -sf --retry 2 -H "Authorization: Bearer $UPLOAD_TOKEN" "$@"; }
 enc() { python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+# accept a pasted share URL anywhere a slug is expected: strip scheme://host/ and trailing /
+deslug() {
+  local a="$1"
+  case "$a" in *://*) a="${a#*://}"; a="${a#*/}" ;; esac
+  printf '%s' "${a%/}"
+}
 
 case "${1:-}" in
   -h|--help)
@@ -17,8 +23,8 @@ case "${1:-}" in
 usage: share [-e] <file-or-dir> [name]   publish (new slug w/ random suffix)
        share <files...>                  glob form: one share named for parent dir
        share -e <file-or-dir> <slug>     overwrite existing share (same URL)
-       share rm <slug>                   delete a share
-       share download <slug> [dest]      pull a share's files into dest/ (default: slug/)
+       share rm <url-or-slug>            delete a share
+       share download <url-or-slug> [dest]  pull a share's files into dest/ (default: slug/)
        share cat <url-or-slug>[/file]    print share contents to stdout (URL ok as-is)
        share                             list all shares
 
@@ -45,14 +51,11 @@ personal token, config snippet, and a copy of this script.
 EOF
     exit 0 ;;
   rm)
-    slug="${2:?usage: share rm <slug>}"
+    slug="$(deslug "${2:?usage: share rm <slug>}")"
     auth -X DELETE "$BASE_URL/$(enc "$slug")/"
     exit 0 ;;
   cat)
-    arg="${2:?usage: share cat <url-or-slug>[/file]}"
-    # accept a pasted URL: strip scheme://host/
-    case "$arg" in *://*) arg="${arg#*://}"; arg="${arg#*/}" ;; esac
-    arg="${arg%/}"
+    arg="$(deslug "${2:?usage: share cat <url-or-slug>[/file]}")"
     if [ "${arg#*/}" != "$arg" ]; then
       # slug/path form -> one file, raw
       auth "$BASE_URL/$(enc "$arg")"
@@ -68,7 +71,7 @@ EOF
     done
     exit 0 ;;
   download)
-    slug="${2:?usage: share download <slug> [dest]}"
+    slug="$(deslug "${2:?usage: share download <slug> [dest]}")"
     dest="${3:-$slug}"
     n=0
     while IFS= read -r k; do
