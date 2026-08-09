@@ -284,6 +284,7 @@ ${body}
     link(li, claim('item-' + path.join('-')))
   })
   document.querySelectorAll('pre').forEach(function (pre) {
+    if (pre.closest('#pv')) return
     var b = document.createElement('button')
     b.textContent = 'copy'; b.className = 'copy'
     b.onclick = function () {
@@ -423,9 +424,13 @@ async function serve(url, email, env, accept) {
   .lst button:hover{color:var(--fg);border-color:var(--muted)}
   #pv{display:none;position:fixed;z-index:10;max-width:44rem;max-height:45vh;overflow:hidden;
     background:var(--code-bg);border:1px solid var(--border);border-radius:6px;
-    box-shadow:0 4px 16px rgba(0,0,0,.25);padding:.5rem .75rem;pointer-events:none}
-  #pv .f{color:var(--muted);font-size:.75rem;margin-bottom:.25rem;
+    box-shadow:0 4px 16px rgba(0,0,0,.25);padding:.5rem .75rem}
+  #pv .f{color:var(--muted);font-size:.75rem;margin:0 3.5rem .25rem 0;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  #pv .c{position:absolute;top:.35rem;right:.4rem;font:inherit;font-size:.7rem;
+    color:var(--muted);background:none;border:1px solid var(--border);border-radius:5px;
+    padding:.05em .45em;cursor:pointer}
+  #pv .c:hover{color:var(--fg);border-color:var(--muted)}
   #pv pre{margin:0;padding:0;background:none;min-width:0;width:auto;left:0;transform:none;
     max-width:none;font-size:.75rem;line-height:1.4;white-space:pre-wrap;overflow:hidden}
 </style>
@@ -448,14 +453,28 @@ document.querySelectorAll('.lst button').forEach(function (b) {
 })
 var pv = document.createElement('div')
 pv.id = 'pv'
-pv.innerHTML = '<div class="f"></div><pre></pre>'
+pv.innerHTML = '<div class="f"></div><button class="c">copy</button><pre></pre>'
 document.body.appendChild(pv)
-var pvCache = {}, pvTimer = null, pvCur = null
+var pvCache = {}, pvTimer = null, pvHide = null, pvCur = null
+function hidePv() { pv.style.display = 'none'; pvCur = null }
+pv.addEventListener('mouseenter', function () { clearTimeout(pvHide) })
+pv.addEventListener('mouseleave', function () { pvHide = setTimeout(hidePv, 150) })
+pv.querySelector('.c').addEventListener('click', function () {
+  var b = this
+  fetch(pv.dataset.u, { cache: 'no-store' })
+    .then(function (r) { return r.text() })
+    .then(function (t) { return navigator.clipboard.writeText(t) })
+    .then(function () {
+      b.textContent = 'copied'; setTimeout(function () { b.textContent = 'copy' }, 1000)
+    })
+    .catch(function () {})
+})
 document.querySelectorAll('#shares tr').forEach(function (tr) {
   var a = tr.querySelector('td.s a')
   if (!a) return
   var u = a.getAttribute('href')
   tr.addEventListener('mouseenter', function () {
+    clearTimeout(pvHide)
     pvCur = u
     pvTimer = setTimeout(function () {
       var got = pvCache[u]
@@ -466,6 +485,7 @@ document.querySelectorAll('#shares tr').forEach(function (tr) {
         if (pvCur !== u) return
         pv.querySelector('.f').textContent = j.file
         pv.querySelector('pre').textContent = j.text
+        pv.dataset.u = u + j.file
         var r = tr.getBoundingClientRect()
         pv.style.left = Math.min(r.left + 24, innerWidth - 400) + 'px'
         pv.style.display = 'block'
@@ -479,7 +499,8 @@ document.querySelectorAll('#shares tr').forEach(function (tr) {
     }, 250)
   })
   tr.addEventListener('mouseleave', function () {
-    pvCur = null; clearTimeout(pvTimer); pv.style.display = 'none'
+    clearTimeout(pvTimer)
+    pvHide = setTimeout(hidePv, 150)
   })
 })
 </script>`, { vsrc: JSON.stringify(sorted) })
