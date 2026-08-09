@@ -664,6 +664,11 @@ async function render(key, env, accept) {
   if (ext === 'md') {
     const md = await env.SHARES.get(key, 'text')
     if (md === null) return null
+    if (!wantsHtml) {
+      return new Response(md, {
+        headers: { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'private, no-cache' },
+      })
+    }
     const title = (md.match(/^#\s+(.+)$/m) || [, key])[1]
     return page(title, marked.parse(md), { copy: true })
   }
