@@ -19,6 +19,7 @@ usage: share [-e] <file-or-dir> [name]   publish (new slug w/ random suffix)
        share -e <file-or-dir> <slug>     overwrite existing share (same URL)
        share rm <slug>                   delete a share
        share download <slug> [dest]      pull a share's files into dest/ (default: slug/)
+       share cat <url-or-slug>[/file]    print share contents to stdout (URL ok as-is)
        share                             list all shares
 
 examples:
@@ -28,6 +29,7 @@ examples:
   pbpaste | share -f slides.html   stdin -> published under that filename
   share -e ./dir cool-name-a3f2b   overwrite existing share, same URL
   share                            list your shares + URLs
+  share cat https://…/report-a3f2b/   read a pasted share URL (agent-friendly)
   share rm cool-name-a3f2b         delete
 
 related:
@@ -45,6 +47,25 @@ EOF
   rm)
     slug="${2:?usage: share rm <slug>}"
     auth -X DELETE "$BASE_URL/$(enc "$slug")/"
+    exit 0 ;;
+  cat)
+    arg="${2:?usage: share cat <url-or-slug>[/file]}"
+    # accept a pasted URL: strip scheme://host/
+    case "$arg" in *://*) arg="${arg#*://}"; arg="${arg#*/}" ;; esac
+    arg="${arg%/}"
+    if [ "${arg#*/}" != "$arg" ]; then
+      # slug/path form -> one file, raw
+      auth "$BASE_URL/$(enc "$arg")"
+      exit 0
+    fi
+    files=()
+    while IFS= read -r k; do files+=("$k"); done < <(auth "$BASE_URL/_list?prefix=$(enc "$arg/")")
+    [ "${#files[@]}" -gt 0 ] || { echo "no share '$arg' (run \`share\` to list)" >&2; exit 1; }
+    for k in ${files[@]+"${files[@]}"}; do
+      if [ "${#files[@]}" -gt 1 ]; then printf '==> %s <==\n' "${k#"$arg"/}"; fi
+      auth "$BASE_URL/$(enc "$k")"
+      if [ "${#files[@]}" -gt 1 ]; then printf '\n'; fi
+    done
     exit 0 ;;
   download)
     slug="${2:?usage: share download <slug> [dest]}"
