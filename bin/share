@@ -138,7 +138,10 @@ fi
 URL="$BASE_URL/$(enc "$NAME")/"
 echo "$URL"
 
-put() { auth -T "$1" "$BASE_URL/$(enc "$NAME")/$(enc "$2")" > /dev/null; }
+# every put records the remote name; finalize POSTs the list so the worker
+# can maintain the share's manifest without KV list() calls
+MAN=()
+put() { MAN+=("$2"); auth -T "$1" "$BASE_URL/$(enc "$NAME")/$(enc "$2")" > /dev/null; }
 
 if [ "${#MULTI[@]}" -gt 0 ]; then
   for s in ${MULTI[@]+"${MULTI[@]}"}; do
@@ -161,11 +164,15 @@ elif [ -f "$SRC" ]; then
 else
   pids=()
   while IFS= read -r f; do
-    put "$f" "${f#"$SRC"/}" &
+    rel="${f#"$SRC"/}"
+    MAN+=("$rel")
+    auth -T "$f" "$BASE_URL/$(enc "$NAME")/$(enc "$rel")" > /dev/null &
     pids+=($!)
     [ "${#pids[@]}" -ge 8 ] && { wait "${pids[0]}"; pids=("${pids[@]:1}"); }
   done < <(find "$SRC" -type f ! -path '*/.git/*')
   for p in ${pids[@]+"${pids[@]}"}; do wait "$p"; done
 fi
+
+printf '%s\n' ${MAN[@]+"${MAN[@]}"} | auth -X POST --data-binary @- "$BASE_URL/_finalize/$(enc "$NAME")" > /dev/null
 
 echo "uploaded" >&2

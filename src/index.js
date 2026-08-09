@@ -32,8 +32,8 @@ async function handle(req, env) {
     // CLI endpoints: bearer token, no cookies involved. Bearer GET serves
     // raw bytes (for `share download`); browsers never send one.
     const bearer = (req.headers.get('authorization') || '').replace(/^Bearer /, '')
-    if (req.method === 'PUT' || req.method === 'DELETE' || url.pathname === '/_list'
-        || (req.method === 'GET' && bearer)) {
+    if (req.method === 'PUT' || req.method === 'DELETE' || req.method === 'POST'
+        || url.pathname === '/_list' || (req.method === 'GET' && bearer)) {
       const who = await tokenEmail(env, bearer)
       if (!who) return new Response('forbidden', { status: 403 })
       return cli(req, url, env, who)
@@ -64,20 +64,54 @@ async function allKeys(env, prefix) {
   return (await allEntries(env, prefix)).map((k) => k.name)
 }
 
-// top-level slugs -> { n: file count, t: newest timestamp, o: owner email }.
-// Files published before multi-user carry no owner; callers treat a missing
-// o as ADMIN_EMAIL. Skips the _own/ bookkeeping keys.
+// ---------- manifests ----------
+// KV bills list() at 1k/day free but get() at 100k/day, so enumeration must
+// not depend on list(). Each share keeps a _man/<top> manifest (JSON
+// {files,t,o}, same info duplicated into the key's metadata) written by the
+// CLI's finalize call after upload. Shares missing one (legacy, raw-curl
+// uploads) heal on first enumeration via a single list().
+
+async function writeManifest(env, top, files, o, t) {
+  const man = { files: [...files].sort(), t, o }
+  await env.SHARES.put(`_man/${top}`, JSON.stringify(man),
+    { metadata: { n: man.files.length, t, o } })
+  topsCache = { at: 0, v: null }
+  return man
+}
+
+// Rebuild from a real list() -- the lazy-heal and migration path.
+async function rebuildManifest(env, top) {
+  const entries = await allEntries(env, `${top}/`)
+  if (!entries.length) return null
+  const o = (await env.SHARES.get(`_own/${top}`))
+    || entries.find((e) => e.metadata?.o)?.metadata?.o || env.ADMIN_EMAIL
+  const t = Math.max(0, ...entries.map((e) => e.metadata?.t || 0))
+  return writeManifest(env, top, entries.map((e) => e.name.slice(top.length + 1)), o, t)
+}
+
+// Manifest for one share, healing if absent. Returns null when the share
+// doesn't exist.
+async function manifest(env, top) {
+  return (await env.SHARES.get(`_man/${top}`, 'json')) || rebuildManifest(env, top)
+}
+
+// full key names for a share, from its manifest
+const manKeys = (top, man) => man.files.map((f) => `${top}/${f}`)
+
+// top-level slugs -> { n: file count, t: newest timestamp, o: owner email },
+// from one list() over the _man/ prefix (metadata carries everything).
+// Cached ~60s per isolate; KV is ~60s eventually consistent anyway.
+let topsCache = { at: 0, v: null }
+
 async function shareTops(env) {
+  if (topsCache.v && Date.now() - topsCache.at < 60_000) return topsCache.v
   const tops = new Map()
-  for (const k of await allEntries(env)) {
-    if (k.name.startsWith('_own/')) continue
-    const top = k.name.split('/')[0]
-    const s = tops.get(top) || { n: 0, t: 0, o: undefined }
-    s.n += 1
-    s.t = Math.max(s.t, k.metadata?.t || 0)
-    s.o = s.o || k.metadata?.o
-    tops.set(top, s)
+  for (const k of await allEntries(env, '_man/')) {
+    tops.set(k.name.slice('_man/'.length), {
+      n: k.metadata?.n || 0, t: k.metadata?.t || 0, o: k.metadata?.o,
+    })
   }
+  topsCache = { at: Date.now(), v: tops }
   return tops
 }
 
@@ -94,21 +128,60 @@ async function cli(req, url, env, who) {
     // on anything you can view); bare _list lists your own share slugs
     const prefix = url.searchParams.get('prefix')
     if (prefix?.startsWith('_')) return new Response('reserved\n', { status: 400 })
-    const names = prefix
-      ? await allKeys(env, prefix)
-      : [...await shareTops(env)]
-          .filter(([, s]) => admin || (s.o || env.ADMIN_EMAIL) === who)
-          .map(([top]) => top).sort()
+    if (prefix) {
+      const top = prefix.replace(/\/.*$/, '')
+      const man = await manifest(env, top)
+      const names = man ? manKeys(top, man).filter((n) => n.startsWith(prefix)) : []
+      return new Response(names.join('\n') + (names.length ? '\n' : ''))
+    }
+    const names = [...await shareTops(env)]
+      .filter(([, s]) => admin || (s.o || env.ADMIN_EMAIL) === who)
+      .map(([top]) => top).sort()
     return new Response(names.join('\n') + (names.length ? '\n' : ''))
+  }
+
+  // POST /_migrate (admin): rebuild every manifest + _own key from a full
+  // list() sweep. One-time bootstrap for pre-manifest shares.
+  if (url.pathname === '/_migrate') {
+    if (!admin) return new Response('forbidden', { status: 403 })
+    const tops = new Set()
+    for (const k of await allKeys(env)) {
+      if (!k.startsWith('_')) tops.add(k.split('/')[0])
+    }
+    for (const top of tops) {
+      const man = await rebuildManifest(env, top)
+      if (man && !(await env.SHARES.get(`_own/${top}`))) {
+        await env.SHARES.put(`_own/${top}`, man.o)
+      }
+    }
+    topsCache = { at: 0, v: null }
+    return new Response(`migrated ${tops.size}\n`)
   }
 
   const key = decodeURIComponent(url.pathname.slice(1))
   if (!key) return new Response('missing key', { status: 400 })
 
-  // _-prefixed top segments are reserved (the _own/ ownership keys live in
-  // KV; _list/_token/_cli/_peek/_zip are routes). Reads AND writes: a PUT
-  // to /_own/<slug> could hijack ownership, a GET/list under _own/ would
-  // enumerate every slug (share URLs are meant to be unguessable).
+  // POST /_finalize/<slug>, body = newline-separated relative paths the CLI
+  // just uploaded: writes the manifest without any list(). Owner-gated like
+  // other writes; worst case an owner mis-lists their own share.
+  if (key.startsWith('_finalize/')) {
+    const top = key.slice('_finalize/'.length).replace(/\/$/, '')
+    if (!top || top.startsWith('_')) return new Response('bad slug\n', { status: 400 })
+    const owner = await env.SHARES.get(`_own/${top}`)
+    if (owner && owner !== who && !admin) {
+      return new Response(`owned by ${owner}\n`, { status: 403 })
+    }
+    const files = (await req.text()).split('\n').map((s) => s.trim()).filter(Boolean)
+    if (!files.length) return new Response('empty manifest\n', { status: 400 })
+    await writeManifest(env, top, files, owner || who, Date.now())
+    return new Response('ok\n')
+  }
+
+  // _-prefixed top segments are reserved (the _own/ + _man/ bookkeeping
+  // keys live in KV; _list/_token/_cli/_peek/_zip are routes). Reads AND
+  // writes: a PUT to /_own/<slug> could hijack ownership, a GET/list under
+  // _own/ would enumerate every slug (share URLs are meant to be
+  // unguessable).
   if (key.startsWith('_')) return new Response('reserved\n', { status: 400 })
 
   if (req.method === 'GET') {
@@ -120,9 +193,8 @@ async function cli(req, url, env, who) {
   // Writes only touch your own shares (admin can touch anything). Owner
   // lives in a dedicated _own/<slug> key: a KV *read* per PUT instead of a
   // list -- the free tier allows 1k lists/day but 100k reads. A missing
-  // _own key means the slug is unclaimed (every existing share got one
-  // backfilled); the first PUT claims it. Racers on the same fresh slug are
-  // moot: random suffixes.
+  // _own key means the slug is unclaimed; the first PUT claims it. Racers
+  // on the same fresh slug are moot: random suffixes.
   const top = key.replace(/\/.*$/, '')
   const ownKey = `_own/${top}`
   const owner = await env.SHARES.get(ownKey)
@@ -138,10 +210,13 @@ async function cli(req, url, env, who) {
     return new Response('ok\n')
   }
 
-  // DELETE /name/ removes every object under the prefix
+  // DELETE /name/ removes every object under the prefix, plus bookkeeping.
+  // Still a real list(): catches files a stale manifest doesn't know about.
   const names = await allKeys(env, key)
   await Promise.all(names.map((n) => env.SHARES.delete(n)))
   await env.SHARES.delete(ownKey)
+  await env.SHARES.delete(`_man/${top}`)
+  topsCache = { at: 0, v: null }
   return new Response(`deleted ${names.length}\n`)
 }
 
@@ -614,7 +689,8 @@ EOF`
   // /slug/_peek: first lines of the share's main file, for hover previews
   if (key.endsWith('/_peek')) {
     const prefix = key.slice(0, -'_peek'.length)
-    const names = await allKeys(env, prefix)
+    const man = await manifest(env, prefix.slice(0, -1))
+    const names = man ? manKeys(prefix.slice(0, -1), man) : []
     if (!names.length) return notFound()
     const pick = names.find((n) => n.endsWith('/index.md')) || names[0]
     const buf = await env.SHARES.get(pick, 'arrayBuffer')
@@ -633,7 +709,8 @@ EOF`
   // /slug/_zip: whole share as a zip (in-memory; KV caps files at 25MB)
   if (key.endsWith('/_zip')) {
     const prefix = key.slice(0, -'_zip'.length)
-    const names = await allKeys(env, prefix)
+    const man = await manifest(env, prefix.slice(0, -1))
+    const names = man ? manKeys(prefix.slice(0, -1), man) : []
     if (!names.length) return notFound()
     const files = {}
     for (const n of names) {
@@ -657,7 +734,8 @@ EOF`
       const hit = await render(cand, env, accept)
       if (hit) return hit
     }
-    const names = await allKeys(env, key)
+    const man = await manifest(env, key.slice(0, -1))
+    const names = man ? manKeys(key.slice(0, -1), man) : []
     if (!names.length) return notFound()
     // one file -> skip the listing, land on the file itself
     if (names.length === 1) return Response.redirect(`${url.origin}/${encodeURI(names[0])}`, 302)
@@ -671,9 +749,11 @@ EOF`
   const hit = await render(key, env, accept)
   if (hit) return hit
 
-  // /name -> /name/ when the share exists
-  const l = await env.SHARES.list({ prefix: `${key}/`, limit: 1 })
-  if (l.keys.length) return Response.redirect(`${url.origin}/${key}/`, 302)
+  // /name -> /name/ when the share exists. Manifest get only, no lazy heal:
+  // this path sees every 404 typo, and heals cost a list() each.
+  if (await env.SHARES.get(`_man/${key}`)) {
+    return Response.redirect(`${url.origin}/${key}/`, 302)
+  }
   return notFound()
 }
 
