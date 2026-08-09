@@ -15,7 +15,19 @@ const SESSION_DAYS = 7
 
 export default {
   async fetch(req, env) {
-    const url = new URL(req.url)
+    try {
+      return await handle(req, env)
+    } catch (e) {
+      // mainly the KV free-tier "list() limit exceeded for the day" -- show
+      // something human instead of Cloudflare's 1101 screen
+      return new Response(`mb-shares hiccup: ${e.message}\n(daily KV quota? resets midnight UTC)\n`,
+        { status: 503, headers: { 'retry-after': '3600' } })
+    }
+  },
+}
+
+async function handle(req, env) {
+  const url = new URL(req.url)
 
     // CLI endpoints: bearer token, no cookies involved. Bearer GET serves
     // raw bytes (for `share download`); browsers never send one.
@@ -33,7 +45,6 @@ export default {
     if (!email) return redirectToGoogle(url, env)
 
     return serve(url, email, env, req.headers.get('accept'))
-  },
 }
 
 // ---------- KV helpers ----------
