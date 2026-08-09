@@ -197,11 +197,12 @@ function vhash(s) {
   return h.toString(36)
 }
 
-// vsrc: what the auto-refresh fingerprint hashes; defaults to the body.
+// opts.vsrc: what the auto-refresh fingerprint hashes; defaults to the body.
 // Pages with time-relative text pass stable data instead to avoid a
 // fingerprint that changes every render (= infinite reload loop).
-function page(title, body, vsrc) {
-  const v = vhash(vsrc || body)
+// opts.copy: show the fixed top-right button that copies the raw file.
+function page(title, body, opts = {}) {
+  const v = vhash(opts.vsrc || body)
   return new Response(
     `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
@@ -241,9 +242,17 @@ function page(title, body, vsrc) {
   .anchor{opacity:0;margin-right:.35em;text-decoration:none}
   :hover>.anchor{opacity:1}
   :target{background:var(--target)}
+  #cpall{position:fixed;top:.75rem;right:.75rem;z-index:9;font:inherit;font-size:.75rem;
+    color:var(--muted);background:var(--code-bg);border:1px solid var(--border);
+    border-radius:6px;padding:.15em .6em;cursor:pointer}
+  #cpall:hover{color:var(--fg);border-color:var(--muted)}
+  #thg{position:fixed;bottom:.75rem;right:.75rem;z-index:9;font:inherit;font-size:.75rem;
+    color:var(--muted);background:var(--code-bg);border:1px solid var(--border);
+    border-radius:6px;padding:.1em .3em}
 </style>
 <link rel="stylesheet" data-hl media="(prefers-color-scheme: light)" href="${HLJS}/styles/github.min.css">
 <link rel="stylesheet" data-hl media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
+${opts.copy ? '<button id="cpall" title="copy raw file contents">copy</button>' : ''}
 ${body}
 <script src="${HLJS}/highlight.min.js"></script>
 <script>
@@ -315,6 +324,33 @@ ${body}
     document.head.appendChild(s)
   })
   if (!pending) hljs.highlightAll()
+  // theme picker: fixed bottom-right on every rendered page
+  var tsel = document.createElement('select')
+  tsel.id = 'thg'; tsel.title = 'theme'
+  ;['auto', 'light', 'dark', 'tokyo', 'nord'].forEach(function (o) {
+    var op = document.createElement('option')
+    op.value = o === 'auto' ? '' : o
+    op.textContent = o
+    tsel.appendChild(op)
+  })
+  tsel.value = tname
+  tsel.addEventListener('change', function () {
+    try { localStorage.setItem('theme', tsel.value) } catch (e) {}
+    location.reload()
+  })
+  document.body.appendChild(tsel)
+  // top-right copy: fetch() gets raw bytes via Accept negotiation, so this
+  // copies the true file content even on pretty-rendered pages
+  var cp = document.getElementById('cpall')
+  if (cp) cp.addEventListener('click', function () {
+    fetch(location.href, { cache: 'no-store' })
+      .then(function (r) { return r.text() })
+      .then(function (t) { return navigator.clipboard.writeText(t) })
+      .then(function () {
+        cp.textContent = 'copied'; setTimeout(function () { cp.textContent = 'copy' }, 1200)
+      })
+      .catch(function () {})
+  })
   // auto-refresh: reload when a push changes the content fingerprint
   setInterval(function () {
     fetch(location.href, { cache: 'no-store' })
@@ -368,10 +404,7 @@ async function serve(url, email, env, accept) {
         s.t ? new Date(s.t).toISOString() : 'published before timestamps existed'}">${
         ago(s.t)}</td><td><button data-u="/${esc(p)}/">url</button></td></tr>`)
     return page('shares', `<style>
-  .hd{display:flex;align-items:baseline;gap:1rem;margin-bottom:.5rem}
-  .hd h1{margin:0;font-size:1.3rem;flex:1}
-  #th{font:inherit;font-size:.8rem;background:var(--code-bg);color:var(--fg);
-    border:1px solid var(--border);border-radius:6px;padding:.15em .4em}
+  .hd h1{margin:0 0 .5rem;font-size:1.3rem}
   #q{width:100%;box-sizing:border-box;font:inherit;font-size:.9rem;padding:.35em .6em;
     background:var(--code-bg);color:var(--fg);border:1px solid var(--border);
     border-radius:6px;margin:0 0 .75rem}
@@ -388,10 +421,15 @@ async function serve(url, email, env, accept) {
   .lst button{font:inherit;font-size:.7rem;color:var(--muted);background:none;
     border:1px solid var(--border);border-radius:5px;padding:.05em .45em;cursor:pointer}
   .lst button:hover{color:var(--fg);border-color:var(--muted)}
+  #pv{display:none;position:fixed;z-index:10;max-width:44rem;max-height:45vh;overflow:hidden;
+    background:var(--code-bg);border:1px solid var(--border);border-radius:6px;
+    box-shadow:0 4px 16px rgba(0,0,0,.25);padding:.5rem .75rem;pointer-events:none}
+  #pv .f{color:var(--muted);font-size:.75rem;margin-bottom:.25rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  #pv pre{margin:0;padding:0;background:none;min-width:0;width:auto;left:0;transform:none;
+    max-width:none;font-size:.75rem;line-height:1.4;white-space:pre-wrap;overflow:hidden}
 </style>
-<div class="hd"><h1>shares</h1><select id="th" title="theme">
-<option value="">auto</option><option value="light">light</option><option value="dark">dark</option>
-<option value="tokyo">tokyo</option><option value="nord">nord</option></select></div>
+<div class="hd"><h1>shares</h1></div>
 <input id="q" placeholder="filter" autofocus>
 <table class="lst"><tbody id="shares">${rows.join('')}</tbody></table>
 <script>
@@ -401,12 +439,6 @@ document.getElementById('q').addEventListener('input', function () {
     tr.style.display = tr.textContent.toLowerCase().indexOf(q) === -1 ? 'none' : ''
   })
 })
-var th = document.getElementById('th')
-try { th.value = localStorage.getItem('theme') || '' } catch (e) {}
-th.addEventListener('change', function () {
-  try { localStorage.setItem('theme', th.value) } catch (e) {}
-  location.reload()
-})
 document.querySelectorAll('.lst button').forEach(function (b) {
   b.addEventListener('click', function () {
     navigator.clipboard.writeText(location.origin + b.getAttribute('data-u')).then(function () {
@@ -414,7 +446,62 @@ document.querySelectorAll('.lst button').forEach(function (b) {
     })
   })
 })
-</script>`, JSON.stringify(sorted))
+var pv = document.createElement('div')
+pv.id = 'pv'
+pv.innerHTML = '<div class="f"></div><pre></pre>'
+document.body.appendChild(pv)
+var pvCache = {}, pvTimer = null, pvCur = null
+document.querySelectorAll('#shares tr').forEach(function (tr) {
+  var a = tr.querySelector('td.s a')
+  if (!a) return
+  var u = a.getAttribute('href')
+  tr.addEventListener('mouseenter', function () {
+    pvCur = u
+    pvTimer = setTimeout(function () {
+      var got = pvCache[u]
+        ? Promise.resolve(pvCache[u])
+        : fetch(u + '_peek').then(function (r) { return r.json() })
+            .then(function (j) { pvCache[u] = j; return j })
+      got.then(function (j) {
+        if (pvCur !== u) return
+        pv.querySelector('.f').textContent = j.file
+        pv.querySelector('pre').textContent = j.text
+        var r = tr.getBoundingClientRect()
+        pv.style.left = Math.min(r.left + 24, innerWidth - 400) + 'px'
+        pv.style.display = 'block'
+        var below = innerHeight - r.bottom - 8
+        if (below < pv.offsetHeight && r.top > innerHeight / 2) {
+          pv.style.top = Math.max(4, r.top - pv.offsetHeight - 4) + 'px'
+        } else {
+          pv.style.top = (r.bottom + 4) + 'px'
+        }
+      }).catch(function () {})
+    }, 250)
+  })
+  tr.addEventListener('mouseleave', function () {
+    pvCur = null; clearTimeout(pvTimer); pv.style.display = 'none'
+  })
+})
+</script>`, { vsrc: JSON.stringify(sorted) })
+  }
+
+  // /slug/_peek: first lines of the share's main file, for hover previews
+  if (key.endsWith('/_peek')) {
+    const prefix = key.slice(0, -'_peek'.length)
+    const names = await allKeys(env, prefix)
+    if (!names.length) return notFound()
+    const pick = names.find((n) => n.endsWith('/index.md')) || names[0]
+    const buf = await env.SHARES.get(pick, 'arrayBuffer')
+    let text
+    if (buf && !new Uint8Array(buf, 0, Math.min(4096, buf.byteLength)).includes(0)) {
+      text = new TextDecoder().decode(buf.slice(0, 8192)).split('\n').slice(0, 10)
+        .map((l) => (l.length > 160 ? l.slice(0, 160) + '…' : l)).join('\n')
+    } else {
+      text = names.map((n) => n.slice(prefix.length)).slice(0, 10).join('\n')
+    }
+    return new Response(JSON.stringify({ file: pick.slice(prefix.length), text }), {
+      headers: { 'content-type': 'application/json', 'cache-control': 'private, no-cache' },
+    })
   }
 
   // /slug/_zip: whole share as a zip (in-memory; KV caps files at 25MB)
@@ -481,6 +568,7 @@ function codePage(key, text, lang) {
   return page(
     key.split('/').pop(),
     `<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(text)}</code></pre>`,
+    { copy: true },
   )
 }
 
@@ -525,6 +613,7 @@ function csvPage(key, text) {
   return page(
     key.split('/').pop(),
     `<table><thead>${tr(rows[0] || [], 'th')}</thead><tbody>${shown.map((r) => tr(r, 'td')).join('')}</tbody></table>${note}`,
+    { copy: true },
   )
 }
 
@@ -539,7 +628,7 @@ async function render(key, env, accept) {
     const md = await env.SHARES.get(key, 'text')
     if (md === null) return null
     const title = (md.match(/^#\s+(.+)$/m) || [, key])[1]
-    return page(title, marked.parse(md))
+    return page(title, marked.parse(md), { copy: true })
   }
 
   if (wantsHtml && ['json', 'jsonl', 'ndjson', 'csv'].includes(ext)) {
