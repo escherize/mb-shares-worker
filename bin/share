@@ -8,6 +8,10 @@ CONF="$HOME/.config/mb-shares/env"
 [ -f "$CONF" ] || { echo "missing $CONF (needs BASE_URL and UPLOAD_TOKEN)" >&2; exit 1; }
 . "$CONF"
 
+# every publish also lands in a local mirror (archive of everything shared);
+# override with MIRROR_DIR in the env file. `share rm` leaves the mirror.
+MIRROR_DIR="${MIRROR_DIR:-$HOME/.local/share/mb-shares}"
+
 auth() { curl -sf --retry 2 -H "Authorization: Bearer $UPLOAD_TOKEN" "$@"; }
 enc() { python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
 # accept a pasted share URL anywhere a slug is expected: strip scheme://host/ and trailing /
@@ -47,6 +51,8 @@ related:
   ggc-gist / ggcp-gist             old public-gist versions (outside-org sharing)
 
 Viewers need a @metabase.com Google login; URLs are safe to paste anywhere.
+Every publish also lands in ~/.local/share/mb-shares/<slug>/ (override with
+MIRROR_DIR in the env file) -- a local archive of everything you've shared.
 First-time setup: sign in at the share site and visit /_token for your
 personal token, config snippet, and a copy of this script.
 EOF
@@ -131,6 +137,7 @@ if [ "$EDIT" = 1 ]; then
   auth "$BASE_URL/_list" | grep -qx "$NAME" \
     || { echo "no existing share '$NAME' (run \`share\` to list); omit -e to create new" >&2; exit 1; }
   auth -X DELETE "$BASE_URL/$(enc "$NAME")/" > /dev/null
+  rm -rf "${MIRROR_DIR:?}/$NAME"   # mirror tracks the share's current content
 else
   NAME="$NAME-$(openssl rand -hex 3)"
 fi
@@ -138,10 +145,12 @@ fi
 URL="$BASE_URL/$(enc "$NAME")/"
 echo "$URL"
 
-# every put records the remote name; finalize POSTs the list so the worker
-# can maintain the share's manifest without KV list() calls
+# every put records the remote name (finalize POSTs the list so the worker
+# can maintain the share's manifest without KV list() calls) and copies the
+# file into the local mirror under the share's exact remote layout
 MAN=()
-put() { MAN+=("$2"); auth -T "$1" "$BASE_URL/$(enc "$NAME")/$(enc "$2")" > /dev/null; }
+mirror() { mkdir -p "$(dirname "$MIRROR_DIR/$NAME/$2")"; cp "$1" "$MIRROR_DIR/$NAME/$2"; }
+put() { MAN+=("$2"); mirror "$1" "$2"; auth -T "$1" "$BASE_URL/$(enc "$NAME")/$(enc "$2")" > /dev/null; }
 
 if [ "${#MULTI[@]}" -gt 0 ]; then
   for s in ${MULTI[@]+"${MULTI[@]}"}; do
@@ -166,6 +175,7 @@ else
   while IFS= read -r f; do
     rel="${f#"$SRC"/}"
     MAN+=("$rel")
+    mirror "$f" "$rel"
     auth -T "$f" "$BASE_URL/$(enc "$NAME")/$(enc "$rel")" > /dev/null &
     pids+=($!)
     [ "${#pids[@]}" -ge 8 ] && { wait "${pids[0]}"; pids=("${pids[@]:1}"); }
