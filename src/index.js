@@ -90,13 +90,23 @@ async function rebuildManifest(env, top) {
 }
 
 // Manifest for one share, healing if absent. Returns null when the share
-// doesn't exist.
+// doesn't exist. Top-level slugs only: healing a subdir path would write a
+// spurious _man/slug/subdir key that shows up as its own share.
 async function manifest(env, top) {
+  if (top.includes('/')) return null
   return (await env.SHARES.get(`_man/${top}`, 'json')) || rebuildManifest(env, top)
 }
 
 // full key names for a share, from its manifest
 const manKeys = (top, man) => man.files.map((f) => `${top}/${f}`)
+
+// full key names under a prefix ("slug/" or "slug/subdir/"), always from the
+// top slug's manifest
+async function keysUnder(env, prefix) {
+  const top = prefix.split('/')[0]
+  const man = await manifest(env, top)
+  return man ? manKeys(top, man).filter((n) => n.startsWith(prefix)) : []
+}
 
 // top-level slugs -> { n: file count, t: newest timestamp, o: owner email },
 // from one list() over the _man/ prefix (metadata carries everything).
@@ -129,9 +139,7 @@ async function cli(req, url, env, who) {
     const prefix = url.searchParams.get('prefix')
     if (prefix?.startsWith('_')) return new Response('reserved\n', { status: 400 })
     if (prefix) {
-      const top = prefix.replace(/\/.*$/, '')
-      const man = await manifest(env, top)
-      const names = man ? manKeys(top, man).filter((n) => n.startsWith(prefix)) : []
+      const names = await keysUnder(env, prefix)
       return new Response(names.join('\n') + (names.length ? '\n' : ''))
     }
     const names = [...await shareTops(env)]
@@ -689,8 +697,7 @@ EOF`
   // /slug/_peek: first lines of the share's main file, for hover previews
   if (key.endsWith('/_peek')) {
     const prefix = key.slice(0, -'_peek'.length)
-    const man = await manifest(env, prefix.slice(0, -1))
-    const names = man ? manKeys(prefix.slice(0, -1), man) : []
+    const names = await keysUnder(env, prefix)
     if (!names.length) return notFound()
     const pick = names.find((n) => n.endsWith('/index.md')) || names[0]
     const buf = await env.SHARES.get(pick, 'arrayBuffer')
@@ -709,8 +716,7 @@ EOF`
   // /slug/_zip: whole share as a zip (in-memory; KV caps files at 25MB)
   if (key.endsWith('/_zip')) {
     const prefix = key.slice(0, -'_zip'.length)
-    const man = await manifest(env, prefix.slice(0, -1))
-    const names = man ? manKeys(prefix.slice(0, -1), man) : []
+    const names = await keysUnder(env, prefix)
     if (!names.length) return notFound()
     const files = {}
     for (const n of names) {
@@ -734,8 +740,7 @@ EOF`
       const hit = await render(cand, env, accept)
       if (hit) return hit
     }
-    const man = await manifest(env, key.slice(0, -1))
-    const names = man ? manKeys(key.slice(0, -1), man) : []
+    const names = await keysUnder(env, key)
     if (!names.length) return notFound()
     // one file -> skip the listing, land on the file itself
     if (names.length === 1) return Response.redirect(`${url.origin}/${encodeURI(names[0])}`, 302)
@@ -753,6 +758,15 @@ EOF`
   // this path sees every 404 typo, and heals cost a list() each.
   if (await env.SHARES.get(`_man/${key}`)) {
     return Response.redirect(`${url.origin}/${key}/`, 302)
+  }
+  // subdirectory inside a share (/slug/receipts): redirect to /slug/receipts/
+  // when the slug's manifest has files under that prefix
+  const top = key.split('/')[0]
+  if (top !== key) {
+    const man = await env.SHARES.get(`_man/${top}`, 'json')
+    if (man?.files.some((f) => f.startsWith(`${key.slice(top.length + 1)}/`))) {
+      return Response.redirect(`${url.origin}/${encodeURI(key)}/`, 302)
+    }
   }
   return notFound()
 }
