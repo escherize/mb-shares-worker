@@ -31,6 +31,7 @@ usage: share [-e] <file-or-dir> [name]   publish (new slug w/ random suffix)
        share download <url-or-slug> [dest]  pull a share's files into dest/ (default: slug/)
        share cat <url-or-slug>[/file]    print share contents to stdout (URL ok as-is)
        share ls <url-or-slug>            list files in a share
+       share --local <url-or-slug>[/file]  print the local path a share came from
        share                             list all shares
 
 examples:
@@ -57,6 +58,19 @@ First-time setup: sign in at the share site and visit /_token for your
 personal token, config snippet, and a copy of this script.
 EOF
     exit 0 ;;
+  --local|local)
+    # url -> the local path it was published from. Publishes record
+    # slug<TAB>source in $MIRROR_DIR/.sources; last entry wins (-e edits).
+    # Source gone (stdin share, moved dir, other machine) -> mirror copy.
+    arg="$(deslug "${2:?usage: share --local <url-or-slug>[/file]}")"
+    top="${arg%%/*}"; rest="${arg#"$top"}"
+    src="$(awk -F'\t' -v s="$top" '$1==s{p=$2} END{if(p)print p}' "$MIRROR_DIR/.sources" 2>/dev/null || true)"
+    if [ -n "$src" ] && [ -e "$src" ]; then
+      if [ -d "$src" ]; then printf '%s%s\n' "$src" "$rest"; else printf '%s\n' "$src"; fi
+      exit 0
+    fi
+    [ -e "$MIRROR_DIR/$arg" ] && { printf '%s\n' "$MIRROR_DIR/$arg"; exit 0; }
+    echo "no local copy of '$top' (published from another machine?)" >&2; exit 1 ;;
   rm)
     slug="$(deslug "${2:?usage: share rm <slug>}")"
     auth -X DELETE "$BASE_URL/$(enc "$slug")/"
@@ -144,6 +158,12 @@ fi
 
 URL="$BASE_URL/$(enc "$NAME")/"
 echo "$URL"
+
+# remember where this share came from, for `share --local <url>`
+SRC_REC="$SRC"
+[ "${#MULTI[@]}" -gt 0 ] && SRC_REC="$(dirname "$SRC")"
+mkdir -p "$MIRROR_DIR"
+printf '%s\t%s\n' "$NAME" "$SRC_REC" >> "$MIRROR_DIR/.sources"
 
 # every put records the remote name (finalize POSTs the list so the worker
 # can maintain the share's manifest without KV list() calls) and copies the
