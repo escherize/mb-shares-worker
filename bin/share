@@ -129,6 +129,10 @@ if [ "${1:-}" = "-f" ] || [ "${1:-}" = "--filename" ]; then
 fi
 
 SRC="${1:?usage: share [-e] <file-or-dir> [name]}"
+# accept file:// URLs (drag-and-drop, "Copy as URL"): strip scheme, %-decode
+case "$SRC" in file://*)
+  SRC="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.unquote(sys.argv[1][7:]))' "$SRC")" ;;
+esac
 SRC="$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")"
 [ -e "$SRC" ] || { echo "no such path: $SRC" >&2; exit 1; }
 
