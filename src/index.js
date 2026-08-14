@@ -14,9 +14,9 @@ import CLI_SH from '../bin/share' // text module (wrangler.toml rules), served a
 const SESSION_DAYS = 7
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     try {
-      return await handle(req, env)
+      return await handle(req, env, ctx)
     } catch (e) {
       // mainly the KV free-tier "list() limit exceeded for the day" -- show
       // something human instead of Cloudflare's 1101 screen
@@ -26,7 +26,7 @@ export default {
   },
 }
 
-async function handle(req, env) {
+async function handle(req, env, ctx) {
   const url = new URL(req.url)
 
     // CLI endpoints: bearer token, no cookies involved. Bearer GET serves
@@ -44,7 +44,29 @@ async function handle(req, env) {
     const email = await sessionEmail(req, env)
     if (!email) return redirectToGoogle(url, env)
 
-    return serve(url, email, env, req.headers.get('accept'))
+    const accept = req.headers.get('accept')
+    const res = await serve(url, email, env, accept)
+
+    // views: count successful browser navigations to share content. Assets
+    // and hover previews fetch() with accept */*; _peek/_zip carry a /_ path.
+    const key = decodeURIComponent(url.pathname.slice(1))
+    if (res.status === 200 && key && !key.startsWith('_') && !key.includes('/_')
+        && accept?.includes('text/html')) {
+      ctx.waitUntil(recordView(env, key.split('/')[0], email))
+    }
+    return res
+}
+
+// View log per share: _views/<top> = { email: { n, last } }. Read-modify-
+// write; concurrent viewers can drop an increment -- fine for analytics.
+// The 30min gap collapses reloads and auto-refresh into one view, keeping
+// KV writes (1k/day free) negligible.
+async function recordView(env, top, email) {
+  const v = (await env.SHARES.get(`_views/${top}`, 'json')) || {}
+  const e = v[email]
+  if (e && Date.now() - e.last < 30 * 60_000) return
+  v[email] = { n: (e?.n || 0) + 1, last: Date.now() }
+  await env.SHARES.put(`_views/${top}`, JSON.stringify(v))
 }
 
 // ---------- KV helpers ----------
@@ -185,12 +207,25 @@ async function cli(req, url, env, who) {
     return new Response('ok\n')
   }
 
-  // _-prefixed top segments are reserved (the _own/ + _man/ bookkeeping
-  // keys live in KV; _list/_token/_cli/_peek/_zip are routes). Reads AND
+  // _-prefixed top segments are reserved (the _own/ + _man/ + _views/
+  // keys live in KV; _list/_token/_cli/_peek/_zip/_views are routes). Reads AND
   // writes: a PUT to /_own/<slug> could hijack ownership, a GET/list under
   // _own/ would enumerate every slug (share URLs are meant to be
   // unguessable).
   if (key.startsWith('_')) return new Response('reserved\n', { status: 400 })
+
+  // GET /slug/_views: who viewed this share (owner or admin only)
+  if (req.method === 'GET' && key.endsWith('/_views')) {
+    const top = key.slice(0, -'/_views'.length)
+    const owner = await env.SHARES.get(`_own/${top}`)
+    if (owner && owner !== who && !admin) {
+      return new Response(`owned by ${owner}\n`, { status: 403 })
+    }
+    const v = (await env.SHARES.get(`_views/${top}`, 'json')) || {}
+    const lines = Object.entries(v).sort((a, b) => b[1].last - a[1].last)
+      .map(([e, x]) => `${e}\t${x.n}\t${new Date(x.last).toISOString()}`)
+    return new Response(lines.join('\n') + (lines.length ? '\n' : ''))
+  }
 
   if (req.method === 'GET') {
     const body = await env.SHARES.get(key, 'stream')
@@ -224,6 +259,7 @@ async function cli(req, url, env, who) {
   await Promise.all(names.map((n) => env.SHARES.delete(n)))
   await env.SHARES.delete(ownKey)
   await env.SHARES.delete(`_man/${top}`)
+  await env.SHARES.delete(`_views/${top}`)
   topsCache = { at: 0, v: null }
   return new Response(`deleted ${names.length}\n`)
 }
@@ -548,11 +584,22 @@ async function serve(url, email, env, accept) {
       .filter(([, s]) => admin || (s.o || env.ADMIN_EMAIL) === email)
     // newest first; pre-timestamp shares (no metadata) sink to the bottom
     const sorted = mine.sort((a, b) => b[1].t - a[1].t || a[0].localeCompare(b[0]))
+    // view logs, one get per row (reads are 100k/day; lists are the scarce thing)
+    const views = new Map(await Promise.all(sorted.map(async ([p]) =>
+      [p, await env.SHARES.get(`_views/${p}`, 'json')])))
+    const viewCell = (p) => {
+      const v = views.get(p)
+      if (!v) return '<td class="v"></td>'
+      const who = Object.entries(v).sort((a, b) => b[1].last - a[1].last)
+        .map(([e, x]) => `${e.split('@')[0]} ×${x.n} ${ago(x.last)}`).join('\n')
+      const n = Object.keys(v).length
+      return `<td class="v" title="${esc(who)}">${n} viewer${n === 1 ? '' : 's'}</td>`
+    }
     const rows = sorted.map(([p, s]) =>
       `<tr><td class="s"><a href="/${esc(p)}/">${esc(p)}</a></td>${
         admin ? `<td class="o">${esc((s.o || env.ADMIN_EMAIL).split('@')[0])}</td>` : ''
       }<td class="n">${s.n} file${
-        s.n === 1 ? '' : 's'}</td><td class="t" title="${
+        s.n === 1 ? '' : 's'}</td>${viewCell(p)}<td class="t" title="${
         s.t ? new Date(s.t).toISOString() : 'published before timestamps existed'}">${
         ago(s.t)}</td><td><button data-u="/${esc(p)}/">url</button></td></tr>`)
     return page('shares', `<style>
@@ -570,6 +617,7 @@ async function serve(url, email, env, accept) {
   .lst td.s a:hover{text-decoration:underline}
   .lst td.o{color:var(--muted)}
   .lst td.n{color:var(--acc1);text-align:right}
+  .lst td.v{color:var(--muted);text-align:right;cursor:default}
   .lst td.t{color:var(--acc2)}
   .lst button{font:inherit;font-size:.7rem;color:var(--muted);background:none;
     border:1px solid var(--border);border-radius:5px;padding:.05em .45em;cursor:pointer}

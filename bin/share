@@ -32,6 +32,7 @@ usage: share [-e] <file-or-dir> [name]   publish (new slug w/ random suffix)
        share cat <url-or-slug>[/file]    print share contents to stdout (URL ok as-is)
        share ls <url-or-slug>            list files in a share
        share --local <url-or-slug>[/file]  print the local path a share came from
+       share views <url-or-slug>         who viewed a share (email, count, last)
        share                             list all shares
 
 examples:
@@ -71,6 +72,12 @@ EOF
     fi
     [ -e "$MIRROR_DIR/$arg" ] && { printf '%s\n' "$MIRROR_DIR/$arg"; exit 0; }
     echo "no local copy of '$top' (published from another machine?)" >&2; exit 1 ;;
+  views)
+    slug="$(deslug "${2:?usage: share views <url-or-slug>}")"
+    out="$(auth "$BASE_URL/$(enc "$slug")/_views")"
+    [ -n "$out" ] || { echo "no views yet" >&2; exit 0; }
+    printf '%s\n' "$out" | column -t -s $'\t'
+    exit 0 ;;
   rm)
     slug="$(deslug "${2:?usage: share rm <slug>}")"
     auth -X DELETE "$BASE_URL/$(enc "$slug")/"
