@@ -430,6 +430,7 @@ function page(title, body, opts = {}) {
   a{color:var(--link)}
   blockquote{border-left:4px solid var(--border);margin-left:0;padding-left:1rem;color:var(--muted)}
   small{color:var(--muted)}
+  footer{margin-top:3rem;padding-top:.75rem;border-top:1px solid var(--border)}
   .mermaid{text-align:center;overflow-x:auto}
   .mermaid svg{max-width:100%}
   table{border-collapse:collapse}td,th{border:1px solid var(--border);padding:.3em .7em}
@@ -448,6 +449,8 @@ function page(title, body, opts = {}) {
 <link rel="stylesheet" data-hl media="(prefers-color-scheme: dark)" href="${HLJS}/styles/github-dark.min.css">
 ${opts.copy ? '<button id="cpall" title="copy raw file contents">copy</button>' : ''}
 ${body}
+${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.slug)}</code>
+ (no cli yet? grab it at <a href="/_token">/_token</a>)</small></footer>` : ''}
 <script src="${HLJS}/highlight.min.js"></script>
 <script>
 (function () {
@@ -825,7 +828,7 @@ EOF`
       (n) => `<li><a href="/${esc(n)}">${esc(n.slice(key.length))}</a></li>`,
     )
     return page(key, `<h1>${esc(key.replace(/\/$/, ''))}</h1><ul>${items.join('')}</ul>
-<p><a href="/${esc(key)}_zip">download all (.zip)</a></p>`)
+<p><a href="/${esc(key)}_zip">download all (.zip)</a></p>`, { slug: key.split('/')[0] })
   }
 
   const hit = await render(key, env, accept)
@@ -870,7 +873,7 @@ function codePage(key, text, lang) {
   return page(
     key.split('/').pop(),
     `<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(text)}</code></pre>`,
-    { copy: true },
+    { copy: true, slug: key.split('/')[0] },
   )
 }
 
@@ -915,7 +918,7 @@ function csvPage(key, text) {
   return page(
     key.split('/').pop(),
     `<table><thead>${tr(rows[0] || [], 'th')}</thead><tbody>${shown.map((r) => tr(r, 'td')).join('')}</tbody></table>${note}`,
-    { copy: true },
+    { copy: true, slug: key.split('/')[0] },
   )
 }
 
@@ -935,7 +938,7 @@ async function render(key, env, accept) {
       })
     }
     const title = (md.match(/^#\s+(.+)$/m) || [, key])[1]
-    return page(title, marked.parse(md), { copy: true })
+    return page(title, marked.parse(md), { copy: true, slug: key.split('/')[0] })
   }
 
   if (wantsHtml && ['json', 'jsonl', 'ndjson', 'csv'].includes(ext)) {
