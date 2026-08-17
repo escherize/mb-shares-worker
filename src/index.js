@@ -768,14 +768,19 @@ pvPump()
     const install = `curl -sH "Authorization: Bearer ${token}" ${url.origin}/_cli -o ~/bin/share && chmod +x ~/bin/share`
     const skill = `mkdir -p ~/.claude/skills/mb-shares && curl -sH "Authorization: Bearer ${token}" ${url.origin}/_skill -o ~/.claude/skills/mb-shares/SKILL.md`
     return page('cli setup', `<h1>cli setup</h1>
-<p>Personal upload token for <code>${esc(email)}</code>. Save the config:</p>
+<p>Personal upload token for <code>${esc(email)}</code>.</p>
+<h2>initial setup</h2>
+<p>Save the config:</p>
 <pre><code>${esc(conf)}</code></pre>
 <p>Install the <code>share</code> script (needs <code>~/bin</code> on your PATH):</p>
 <pre><code>${esc(install)}</code></pre>
+<p>Using Claude Code? Install the mb-shares skill too:</p>
+<pre><code>${esc(skill)}</code></pre>
 <p>Then publish anything: <code>share thing.md</code> prints a URL. <code>share -h</code> for the rest.</p>
-<h2>Install the Skill</h2>
-<p>Use Claude Code? Install the mb-shares skill so it knows how to publish,
-read, and pull shares with the CLI (say "share this" and it does the rest):</p>
+<h2>update / install the skill</h2>
+<p>The skill teaches Claude Code to publish, read, and pull shares with the
+CLI (say "share this" and it does the rest). Re-run anytime to pull the
+latest version:</p>
 <pre><code>${esc(skill)}</code></pre>`)
   }
 
