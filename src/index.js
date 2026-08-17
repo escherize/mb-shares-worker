@@ -773,6 +773,7 @@ pvPump()
 <p>Install the <code>share</code> script (needs <code>~/bin</code> on your PATH):</p>
 <pre><code>${esc(install)}</code></pre>
 <p>Then publish anything: <code>share thing.md</code> prints a URL. <code>share -h</code> for the rest.</p>
+<h2>Install the Skill</h2>
 <p>Use Claude Code? Install the mb-shares skill so it knows how to publish,
 read, and pull shares with the CLI (say "share this" and it does the rest):</p>
 <pre><code>${esc(skill)}</code></pre>`)
