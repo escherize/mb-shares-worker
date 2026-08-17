@@ -767,21 +767,39 @@ pvPump()
     const conf = `mkdir -p ~/.config/mb-shares && printf 'BASE_URL=%s\\nUPLOAD_TOKEN=%s\\n' '${url.origin}' '${token}' > ~/.config/mb-shares/env`
     const install = `curl -sH "Authorization: Bearer ${token}" ${url.origin}/_cli -o ~/bin/share && chmod +x ~/bin/share`
     const skill = `mkdir -p ~/.claude/skills/mb-shares && curl -sH "Authorization: Bearer ${token}" ${url.origin}/_skill -o ~/.claude/skills/mb-shares/SKILL.md`
-    return page('cli setup', `<h1>cli setup</h1>
-<p>Personal upload token for <code>${esc(email)}</code>.</p>
-<h2>initial setup</h2>
-<p>Save the config:</p>
+    return page('cli setup', `<style>
+  .tk h1{margin:0;font-size:1.3rem}
+  .tk .sub{color:var(--muted);margin:.35rem 0 1.5rem}
+  .step{border:1px solid var(--border);border-radius:10px;padding:1rem 1.25rem;margin:0 0 1rem}
+  .step h2{margin:0;font-size:.95rem;font-weight:600}
+  .step .k{display:inline-block;min-width:1.5em;text-align:center;font-size:.85em;
+    background:var(--code-bg);border:1px solid var(--border);border-radius:6px;
+    margin-right:.5em;color:var(--muted)}
+  .step p{margin:.4rem 0 0;font-size:.85rem;color:var(--muted)}
+  .step pre{width:100%;min-width:0;max-width:none;left:0;transform:none;
+    margin:.6rem 0 0;font-size:.78rem;white-space:pre-wrap;overflow-wrap:anywhere}
+  .fin{color:var(--muted);font-size:.9rem}
+</style>
+<div class="tk">
+<h1>cli setup</h1>
+<p class="sub">personal token for <code>${esc(email)}</code> — the snippets below embed it; keep them private</p>
+<div class="step">
+<h2><span class="k">1</span>save the config</h2>
 <pre><code>${esc(conf)}</code></pre>
-<p>Install the <code>share</code> script (needs <code>~/bin</code> on your PATH):</p>
+</div>
+<div class="step">
+<h2><span class="k">2</span>install the <code>share</code> cli</h2>
+<p>needs <code>~/bin</code> on your PATH</p>
 <pre><code>${esc(install)}</code></pre>
-<p>Using Claude Code? Install the mb-shares skill too:</p>
+</div>
+<div class="step">
+<h2><span class="k">3</span>install / update the claude code skill <small>(optional)</small></h2>
+<p>teaches Claude Code to publish, read, and pull shares — say "share this"
+and it does the rest. Re-run anytime to pull the latest version.</p>
 <pre><code>${esc(skill)}</code></pre>
-<p>Then publish anything: <code>share thing.md</code> prints a URL. <code>share -h</code> for the rest.</p>
-<h2>update / install the skill</h2>
-<p>The skill teaches Claude Code to publish, read, and pull shares with the
-CLI (say "share this" and it does the rest). Re-run anytime to pull the
-latest version:</p>
-<pre><code>${esc(skill)}</code></pre>`)
+</div>
+<p class="fin">then publish anything: <code>share thing.md</code> prints a URL — <code>share -h</code> for the rest</p>
+</div>`)
   }
 
   // /slug/_peek: first lines of the share's main file, for hover previews
