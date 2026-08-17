@@ -10,6 +10,7 @@
 import { marked } from 'marked'
 import { zipSync } from 'fflate'
 import CLI_SH from '../bin/share' // text module (wrangler.toml rules), served at /_cli
+import SKILL_MD from '../skill/SKILL.md' // ditto, served at /_skill
 
 const SESSION_DAYS = 7
 
@@ -152,8 +153,9 @@ async function shareTops(env) {
 async function cli(req, url, env, who) {
   const admin = who === env.ADMIN_EMAIL
 
-  // the share script itself, for one-line install from the /_token page
+  // the share script + Claude Code skill, for one-line installs from /_token
   if (url.pathname === '/_cli') return new Response(CLI_SH)
+  if (url.pathname === '/_skill') return new Response(SKILL_MD)
 
   if (url.pathname === '/_list') {
     // ?prefix=slug/ lists every file in a share (any token -- download works
@@ -764,12 +766,16 @@ pvPump()
     // strands zsh at `heredoc>`, and fish has no heredocs at all
     const conf = `mkdir -p ~/.config/mb-shares && printf 'BASE_URL=%s\\nUPLOAD_TOKEN=%s\\n' '${url.origin}' '${token}' > ~/.config/mb-shares/env`
     const install = `curl -sH "Authorization: Bearer ${token}" ${url.origin}/_cli -o ~/bin/share && chmod +x ~/bin/share`
+    const skill = `mkdir -p ~/.claude/skills/mb-shares && curl -sH "Authorization: Bearer ${token}" ${url.origin}/_skill -o ~/.claude/skills/mb-shares/SKILL.md`
     return page('cli setup', `<h1>cli setup</h1>
 <p>Personal upload token for <code>${esc(email)}</code>. Save the config:</p>
 <pre><code>${esc(conf)}</code></pre>
 <p>Install the <code>share</code> script (needs <code>~/bin</code> on your PATH):</p>
 <pre><code>${esc(install)}</code></pre>
-<p>Then publish anything: <code>share thing.md</code> prints a URL. <code>share -h</code> for the rest.</p>`)
+<p>Then publish anything: <code>share thing.md</code> prints a URL. <code>share -h</code> for the rest.</p>
+<p>Use Claude Code? Install the mb-shares skill so it knows how to publish,
+read, and pull shares with the CLI (say "share this" and it does the rest):</p>
+<pre><code>${esc(skill)}</code></pre>`)
   }
 
   // /slug/_peek: first lines of the share's main file, for hover previews

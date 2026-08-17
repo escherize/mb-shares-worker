@@ -2,10 +2,11 @@ name = "mb-shares"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
 
-# bundle bin/share as text so the worker can serve it at /_cli
+# bundle bin/share + skill/SKILL.md as text so the worker can serve them
+# at /_cli and /_skill
 [[rules]]
 type = "Text"
-globs = ["**/bin/share"]
+globs = ["**/bin/share", "**/skill/SKILL.md"]
 fallthrough = true
 
 [[kv_namespaces]]
