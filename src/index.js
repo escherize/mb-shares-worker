@@ -760,11 +760,9 @@ pvPump()
   if (key === '_token') {
     const emailB64 = b64url(new TextEncoder().encode(email))
     const token = `t.${emailB64}.${await hmac(env, `tok.${emailB64}`)}`
-    const conf = `mkdir -p ~/.config/mb-shares
-cat > ~/.config/mb-shares/env <<'EOF'
-BASE_URL=${url.origin}
-UPLOAD_TOKEN=${token}
-EOF`
+    // one line, no heredoc: a copied heredoc missing its trailing newline
+    // strands zsh at `heredoc>`, and fish has no heredocs at all
+    const conf = `mkdir -p ~/.config/mb-shares && printf 'BASE_URL=%s\\nUPLOAD_TOKEN=%s\\n' '${url.origin}' '${token}' > ~/.config/mb-shares/env`
     const install = `curl -sH "Authorization: Bearer ${token}" ${url.origin}/_cli -o ~/bin/share && chmod +x ~/bin/share`
     return page('cli setup', `<h1>cli setup</h1>
 <p>Personal upload token for <code>${esc(email)}</code>. Save the config:</p>
