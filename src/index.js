@@ -578,7 +578,9 @@ async function serve(url, email, env, accept) {
   const key = decodeURIComponent(url.pathname.slice(1))
 
   if (key === '') {
-    const admin = email === env.ADMIN_EMAIL
+    // /?mine: admin's bookmarkable "just my shares" view (non-admins
+    // already see only their own)
+    const admin = email === env.ADMIN_EMAIL && !url.searchParams.has('mine')
     // you see your shares; admin sees everyone's (with an owner column)
     const mine = [...await shareTops(env)]
       .filter(([, s]) => admin || (s.o || env.ADMIN_EMAIL) === email)
@@ -641,7 +643,10 @@ async function serve(url, email, env, accept) {
 <input id="q" placeholder="filter" autofocus>
 <table class="lst"><tbody id="shares">${rows.join('')}</tbody></table>
 ${rows.length ? '' : '<p>No shares yet.</p>'}
-<p><small><a href="/_token">cli setup</a></small></p>
+<p><small><a href="/_token">cli setup</a>${
+  email === env.ADMIN_EMAIL
+    ? admin ? ' · <a href="/?mine">mine only</a>' : ' · <a href="/">everyone</a>'
+    : ''}</small></p>
 <script>
 document.getElementById('q').addEventListener('input', function () {
   var q = this.value.toLowerCase()
