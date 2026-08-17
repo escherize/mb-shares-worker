@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # share -- publish files to the private mb-shares worker (Cloudflare R2).
-# Publishing is instant (parallel PUTs, no builds). Viewers sign in with
-# their @metabase.com Google account.
+# Publishing is instant (no builds; directory uploads PUT 8-way parallel).
+# Viewers sign in with their @metabase.com Google account.
 set -euo pipefail
 
 CONF="$HOME/.config/mb-shares/env"
@@ -24,10 +24,11 @@ deslug() {
 case "${1:-}" in
   -h|--help)
     cat <<'EOF'
-usage: share [-e] <file-or-dir> [name]   publish (new slug w/ random suffix)
+usage: share <file-or-dir> [name]        publish (new slug w/ random suffix)
        share <files...>                  glob form: one share named for parent dir
        share -e <file-or-dir> <slug>     overwrite existing share (same URL)
-       share rm <url-or-slug>            delete a share
+       ... | share [-e] -f <name> [slug] publish stdin as file <name>
+       share rm <url-or-slug>            delete a share (local mirror copy stays)
        share download <url-or-slug> [dest]  pull a share's files into dest/ (default: slug/)
        share cat <url-or-slug>[/file]    print share contents to stdout (URL ok as-is)
        share ls <url-or-slug>            list files in a share
@@ -39,9 +40,9 @@ examples:
   share thing.md                   publish file -> prints URL instantly
   share ./some-dir                 publish whole directory
   share ./dir cool-name            custom name (still gets random suffix)
-  pbpaste | share -f slides.html   stdin -> published under that filename
+  pbpaste | share -f slides.html   stdin; .html/.md becomes the share's index
   share -e ./dir cool-name-a3f2b   overwrite existing share, same URL
-  share                            list your shares + URLs
+  share                            list your share slugs
   share cat https://…/report-a3f2b/   read a pasted share URL (agent-friendly)
   share rm cool-name-a3f2b         delete
 
@@ -53,8 +54,12 @@ related:
   ggc-gist / ggcp-gist             old public-gist versions (outside-org sharing)
 
 Viewers need a @metabase.com Google login; URLs are safe to paste anywhere.
+A single .md/.html file publishes as the share's index (remote name
+index.md/index.html) so the slug URL renders it directly. file:// URLs work
+as publish paths (drag-and-drop / "Copy as URL").
 Every publish also lands in ~/.local/share/mb-shares/<slug>/ (override with
-MIRROR_DIR in the env file) -- a local archive of everything you've shared.
+MIRROR_DIR in the env file) -- a mirror of each share's current content
+(-e replaces it; rm leaves it).
 First-time setup: sign in at the share site and visit /_token for your
 personal token, config snippet, and a copy of this script.
 EOF
@@ -146,7 +151,8 @@ SRC="$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")"
 MULTI=()
 if [ -n "${2:-}" ] && [ -e "$2" ]; then
   # glob form (`share dir/*`): every extra arg is an existing path -> one
-  # share named for the first arg's parent dir, files at top level
+  # share named for the first arg's parent dir; file args land at top
+  # level, dir args nest under basename(dir)/
   MULTI=("$@")
   NAME="$(basename "$(dirname "$SRC")")"
 elif [ -n "${2:-}" ]; then
