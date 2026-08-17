@@ -430,6 +430,8 @@ function page(title, body, opts = {}) {
   a{color:var(--link)}
   blockquote{border-left:4px solid var(--border);margin-left:0;padding-left:1rem;color:var(--muted)}
   small{color:var(--muted)}
+  .mermaid{text-align:center;overflow-x:auto}
+  .mermaid svg{max-width:100%}
   table{border-collapse:collapse}td,th{border:1px solid var(--border);padding:.3em .7em}
   .anchor{opacity:0;margin-right:.35em;text-decoration:none}
   :hover>.anchor{opacity:1}
@@ -517,6 +519,28 @@ ${body}
     document.head.appendChild(s)
   })
   if (!pending) hljs.highlightAll()
+  // mermaid fences -> inline diagrams. Lazy CDN load only when present;
+  // load failure just leaves the highlighted code block. The copy button
+  // added above keeps a closure on the original pre, so it copies source.
+  var mms = document.querySelectorAll('code.language-mermaid')
+  if (mms.length) {
+    var ms = document.createElement('script')
+    ms.src = '${MERMAID}'
+    ms.onload = function () {
+      var dark = tname ? tname !== 'light' : matchMedia('(prefers-color-scheme: dark)').matches
+      mermaid.initialize({ startOnLoad: false, theme: dark ? 'dark' : 'default' })
+      var nodes = []
+      mms.forEach(function (c) {
+        var d = document.createElement('div')
+        d.className = 'mermaid'
+        d.textContent = c.textContent
+        c.closest('pre').replaceWith(d)
+        nodes.push(d)
+      })
+      mermaid.run({ nodes: nodes })
+    }
+    document.head.appendChild(ms)
+  }
   // theme picker: fixed bottom-right on every rendered page
   var tsel = document.createElement('select')
   tsel.id = 'thg'; tsel.title = 'theme'
@@ -838,6 +862,8 @@ const CODE_LANGS = {
 }
 
 const HLJS = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1'
+// jsdelivr, not cdnjs: mermaid 11 ships no single-file build on cdnjs
+const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js'
 
 function codePage(key, text, lang) {
   // page() carries hljs for all rendered pages; the class is enough
