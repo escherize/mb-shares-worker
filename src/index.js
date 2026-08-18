@@ -513,6 +513,12 @@ ${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.
     var m = c.className.match(/language-([\\w-]+)/)
     if (m) need[ALIAS[m[1]] || m[1]] = true
   })
+  // ALIAS picks which grammar file loads, but hljs also has to accept the
+  // fence's own name (\`\`\`gleam -> language-gleam): unknown class names
+  // otherwise render plain, they do not auto-detect
+  Object.keys(ALIAS).forEach(function (a) {
+    if (!hljs.getLanguage(a)) hljs.registerAliases(a, { languageName: ALIAS[a] })
+  })
   var pending = 0
   function done() { if (--pending === 0) hljs.highlightAll() }
   Object.keys(need).forEach(function (l) {
