@@ -27,6 +27,7 @@ case "${1:-}" in
 usage: share <file-or-dir> [name]        publish (new slug w/ random suffix)
        share <files...>                  glob form: one share named for parent dir
        share -e <file-or-dir> <slug>     overwrite existing share (same URL)
+       share -x <file-or-dir> <name>     exact slug, no random suffix (fails if taken)
        ... | share [-e] -f <name> [slug] publish stdin as file <name>
        share rm <url-or-slug>            delete a share (local mirror copy stays)
        share download <url-or-slug> [dest]  pull a share's files into dest/ (default: slug/)
@@ -40,6 +41,7 @@ examples:
   share thing.md                   publish file -> prints URL instantly
   share ./some-dir                 publish whole directory
   share ./dir cool-name            custom name (still gets random suffix)
+  share -x report.md standup       exact memorable URL: /standup/ (guessable!)
   pbpaste | share -f slides.html   stdin; .html/.md becomes the share's index
   share -e ./dir cool-name-a3f2b   overwrite existing share, same URL
   share                            list your share slugs
@@ -129,8 +131,14 @@ if [ $# -eq 0 ]; then
   exit 0
 fi
 
-EDIT=0
-if [ "${1:-}" = "-e" ] || [ "${1:-}" = "--edit" ]; then EDIT=1; shift; fi
+EDIT=0 EXACT=0
+while :; do
+  case "${1:-}" in
+    -e|--edit)  EDIT=1; shift ;;
+    -x|--exact) EXACT=1; shift ;;
+    *) break ;;
+  esac
+done
 
 # stdin mode (gh-gist muscle memory): `pbpaste | share -f slides.html [name]`
 if [ "${1:-}" = "-f" ] || [ "${1:-}" = "--filename" ]; then
@@ -169,6 +177,12 @@ if [ "$EDIT" = 1 ]; then
     || { echo "no existing share '$NAME' (run \`share\` to list); omit -e to create new" >&2; exit 1; }
   auth -X DELETE "$BASE_URL/$(enc "$NAME")/" > /dev/null
   rm -rf "${MIRROR_DIR:?}/$NAME"   # mirror tracks the share's current content
+elif [ "$EXACT" = 1 ]; then
+  # exact slug: no suffix, so check it's free first -- anyone's share, not
+  # just ours (a later PUT into someone else's slug would 403 mid-upload)
+  if [ -n "$(auth "$BASE_URL/_list?prefix=$(enc "$NAME/")" || true)" ]; then
+    echo "share '$NAME' already exists (yours? overwrite with -e)" >&2; exit 1
+  fi
 else
   NAME="$NAME-$(openssl rand -hex 3)"
 fi

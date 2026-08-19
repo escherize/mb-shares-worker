@@ -23,6 +23,9 @@ share thing.md                   # publish one file -> prints URL instantly
 share ./some-dir                 # whole directory, slug = dir name
 share ./dir/*                    # glob form: one share named for parent dir
 share ./dir cool-name            # custom name (still gets random suffix)
+share -x report.md standup       # exact slug -> /standup/, no suffix; fails if
+                                 #   taken. Guessable by any logged-in viewer --
+                                 #   only for shares meant to be findable
 pbpaste | share -f slides.html   # stdin; .html/.md becomes the share's index
 share -e ./dir cool-name-a3f2b   # overwrite existing share, same URL
 share                            # list all shares
