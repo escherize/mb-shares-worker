@@ -14,6 +14,15 @@ import CLI_SH from '../bin/share' // text module (wrangler.toml rules), served a
 import SKILL_MD from '../skill/SKILL.md' // ditto, served at /_skill
 
 marked.use(markedFootnote()) // GFM [^1] footnotes
+// marked-footnote drops the raw label into an aria-label attribute; strip
+// labels to a safe charset so [^x" onclick=...] can't inject attributes
+const fnLabel = (l) => l.replace(/[^\w-]/g, '_')
+marked.use({
+  walkTokens(t) {
+    if (t.type === 'footnoteRef') t.label = fnLabel(t.label)
+    if (t.type === 'footnotes') t.items.forEach((i) => { i.label = fnLabel(i.label) })
+  },
+})
 
 const SESSION_DAYS = 7
 
