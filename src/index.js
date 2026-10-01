@@ -8,9 +8,12 @@
 // Swap the SHARES binding to an R2 bucket if those ceilings ever bite.
 
 import { marked } from 'marked'
+import markedFootnote from 'marked-footnote'
 import { zipSync } from 'fflate'
 import CLI_SH from '../bin/share' // text module (wrangler.toml rules), served at /_cli
 import SKILL_MD from '../skill/SKILL.md' // ditto, served at /_skill
+
+marked.use(markedFootnote()) // GFM [^1] footnotes
 
 const SESSION_DAYS = 7
 
@@ -438,6 +441,10 @@ function page(title, body, opts = {}) {
   table{border-collapse:collapse}td,th{border:1px solid var(--border);padding:.3em .7em}
   .anchor{opacity:0;margin-right:.35em;text-decoration:none}
   :hover>.anchor{opacity:1}
+  /* heading anchors hang in the left gutter so heading text stays flush */
+  :is(h1,h2,h3,h4,h5,h6)>.anchor{position:absolute;margin-left:-1.1em}
+  .footnotes{margin-top:2rem;border-top:1px solid var(--border);font-size:.9em}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
   :target{background:var(--target)}
   #cpall{position:fixed;top:.75rem;right:.75rem;z-index:9;font:inherit;font-size:.75rem;
     color:var(--muted);background:var(--code-bg);border:1px solid var(--border);
@@ -473,7 +480,9 @@ ${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.
     link(h, h.id || claim(h.textContent.trim().toLowerCase().replace(/[^\\w]+/g, '-').replace(/^-|-$/g, '') || 'h'))
   })
   // ordered-list items: id encodes the numbering path, e.g. item-3-2 = 3.b
+  // footnote items skipped: they carry their own ids + backrefs
   document.querySelectorAll('ol > li').forEach(function (li) {
+    if (li.closest('.footnotes')) return
     var path = [], el = li
     while (el && el.tagName === 'LI' && el.parentElement.tagName === 'OL') {
       var ol = el.parentElement

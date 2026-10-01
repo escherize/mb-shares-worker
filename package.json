@@ -3,6 +3,7 @@
   "private": true,
   "dependencies": {
     "fflate": "^0.8.3",
-    "marked": "^15.0.0"
+    "marked": "^15.0.0",
+    "marked-footnote": "^1.4.0"
   }
 }
