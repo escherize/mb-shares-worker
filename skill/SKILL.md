@@ -41,7 +41,7 @@ share views <url-or-slug>        # who viewed a share (email, count, last)
 
 Prefer a single `.md` or `.html` doc — it becomes the share's index and the
 URL renders it directly. Markdown gets full rendering including ```mermaid
-fences as inline diagrams (theme-aware). HTML is served as-is, so
+and ```reladraw fences as inline diagrams (theme-aware). HTML is served as-is, so
 interactive pages work, and they can `fetch()` sibling files in the same
 share (non-browser requests get raw bytes). Directory shares work too
 (nested paths, listing page, zip download) — but go easy on them: share a
@@ -101,6 +101,11 @@ logs) where there is no prose to host it.
   `#` deep-link anchors (`#steps`, `#item-2-2` = step 2, sub-item b).
   ```mermaid fences render as inline diagrams (lazy CDN load, dark/light
   theme follows the page; CDN failure degrades to highlighted code).
+  ```reladraw fences (https://github.com/reladraw/reladraw) render the same
+  way, for diagrams where you say where things go (`b right of a`). Syntax:
+  https://github.com/reladraw/reladraw/blob/main/SYNTAX.md. Check a fence
+  before sharing with `npx reladraw x.reladraw -o -` (errors name the line);
+  a fence that fails to parse stays code on the page.
 - `.json` -> pretty-printed + highlighted; `.jsonl`/`.ndjson` -> one pretty
   record per block. Malformed JSON shows raw.
 - `.csv` -> rendered table (first 1000 rows; quoted fields handled).

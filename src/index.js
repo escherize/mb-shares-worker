@@ -438,6 +438,11 @@ function page(title, body, opts = {}) {
       color:var(--muted);background:none;border:1px solid var(--border);border-radius:6px;
       padding:.1em .6em;cursor:pointer}
   button.copy:hover{color:var(--fg);border-color:var(--muted)}
+  .cprow{display:flex;justify-content:flex-end;gap:.4rem;margin:0 0 .25rem}
+  .cprow button.copy{margin:0}
+  .cprow a{font-size:.75rem;color:var(--muted);border:1px solid var(--border);border-radius:6px;
+      padding:.1em .6em;text-decoration:none}
+  .cprow a:hover{color:var(--fg);border-color:var(--muted)}
   code{background:var(--code-bg);padding:.15em .35em;border-radius:4px;font-size:.9em}
   pre code{background:none;padding:0}
   img{max-width:100%}
@@ -447,11 +452,15 @@ function page(title, body, opts = {}) {
   footer{margin-top:3rem;padding-top:.75rem;border-top:1px solid var(--border)}
   .mermaid{text-align:center;overflow-x:auto}
   .mermaid svg{max-width:100%}
+  .reladraw{text-align:center;overflow-x:auto}
+  .reladraw svg{max-width:100%;height:auto}
   table{border-collapse:collapse}td,th{border:1px solid var(--border);padding:.3em .7em}
   .anchor{opacity:0;margin-right:.35em;text-decoration:none}
   :hover>.anchor{opacity:1}
   /* heading anchors hang in the left gutter so heading text stays flush */
   :is(h1,h2,h3,h4,h5,h6)>.anchor{position:absolute;margin-left:-1.1em}
+  /* li anchors too: inline before a loose item's <p> would break the marker onto its own line */
+  li>.anchor{position:absolute;margin-left:-3em}
   .footnotes{margin-top:2rem;border-top:1px solid var(--border);font-size:.9em}
   .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
   :target{background:var(--target)}
@@ -510,8 +519,27 @@ ${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.
         setTimeout(function () { b.textContent = 'copy' }, 1200)
       })
     }
-    pre.insertAdjacentElement('beforebegin', b)
+    // diagram fences also get an "open on" link to the language's own
+    // editor, source carried in the URL fragment (never sent to a server)
+    var lang = pre.querySelector('code.language-mermaid') ? 'mermaid'
+      : pre.querySelector('code.language-reladraw') ? 'reladraw' : null
+    if (!lang) return pre.insertAdjacentElement('beforebegin', b)
+    var a = document.createElement('a')
+    a.target = '_blank'; a.rel = 'noopener'
+    a.textContent = lang === 'mermaid' ? 'open on mermaid.live' : 'open on reladraw'
+    a.href = lang === 'mermaid'
+      ? 'https://mermaid.live/edit#base64:' + b64u(JSON.stringify({ code: pre.textContent, mermaid: '{"theme":"default"}' }))
+      : 'https://reladraw.github.io/reladraw/#' + b64u(pre.textContent)
+    var row = document.createElement('div')
+    row.className = 'cprow'
+    row.append(a, b)
+    pre.insertAdjacentElement('beforebegin', row)
   })
+  function b64u(s) {
+    var bin = ''
+    new TextEncoder().encode(s).forEach(function (x) { bin += String.fromCharCode(x) })
+    return btoa(bin).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '')
+  }
   // explicit theme replaces the auto (media-query) hljs stylesheets
   var THL = { light: 'github', dark: 'github-dark', tokyo: 'tokyo-night-dark', nord: 'nord' }
   var tname = ''
@@ -570,6 +598,23 @@ ${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.
     }
     document.head.appendChild(ms)
   }
+  // reladraw fences -> inline SVG, same lazy/fallback deal as mermaid. A
+  // parse error leaves that block as code.
+  var rds = document.querySelectorAll('code.language-reladraw')
+  if (rds.length) import('${RELADRAW}').then(function (rd) {
+    // page theme wins over a file's own diagram theme:; tokyo has no
+    // reladraw twin so it falls back to dark
+    var dark = tname ? tname !== 'light' : matchMedia('(prefers-color-scheme: dark)').matches
+    var theme = rd.THEMES[tname] || rd.THEMES[dark ? 'dark' : 'light']
+    rds.forEach(function (c) {
+      try {
+        var d = document.createElement('div')
+        d.className = 'reladraw'
+        d.innerHTML = rd.compile(c.textContent, { theme: theme })
+        c.closest('pre').replaceWith(d)
+      } catch (e) {}
+    })
+  })
   // theme picker: fixed bottom-right on every rendered page
   var tsel = document.createElement('select')
   tsel.id = 'thg'; tsel.title = 'theme'
@@ -919,6 +964,7 @@ const CODE_LANGS = {
 const HLJS = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1'
 // jsdelivr, not cdnjs: mermaid 11 ships no single-file build on cdnjs
 const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js'
+const RELADRAW = 'https://cdn.jsdelivr.net/npm/reladraw@0.11.1/+esm'
 
 function codePage(key, text, lang) {
   // page() carries hljs for all rendered pages; the class is enough

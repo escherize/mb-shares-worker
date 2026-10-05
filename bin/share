@@ -48,13 +48,6 @@ examples:
   share cat https://…/report-a3f2b/   read a pasted share URL (agent-friendly)
   share rm cool-name-a3f2b         delete
 
-related:
-  ggc report.html                  gist-muscle-memory publish
-  ggc doc.md                       md + its local images, auto-attached
-  cat foo.clj | ggc                pipe -> language detected, highlighted
-  ggcp                             clipboard -> published
-  ggc-gist / ggcp-gist             old public-gist versions (outside-org sharing)
-
 Viewers need a @metabase.com Google login; URLs are safe to paste anywhere.
 A single .md/.html file publishes as the share's index (remote name
 index.md/index.html) so the slug URL renders it directly. file:// URLs work
@@ -211,7 +204,7 @@ if [ "${#MULTI[@]}" -gt 0 ]; then
     else
       while IFS= read -r f; do
         put "$f" "$(basename "$s")/${f#"${s%/}"/}"
-      done < <(find "$s" -type f ! -path '*/.git/*')
+      done < <(find -L "$s" -type f ! -path '*/.git/*')
     fi
   done
 elif [ -f "$SRC" ]; then
@@ -230,9 +223,13 @@ else
     auth -T "$f" "$BASE_URL/$(enc "$NAME")/$(enc "$rel")" > /dev/null &
     pids+=($!)
     [ "${#pids[@]}" -ge 8 ] && { wait "${pids[0]}"; pids=("${pids[@]:1}"); }
-  done < <(find "$SRC" -type f ! -path '*/.git/*')
+  done < <(find -L "$SRC" -type f ! -path '*/.git/*')
   for p in ${pids[@]+"${pids[@]}"}; do wait "$p"; done
 fi
+
+# an empty MAN means we uploaded nothing (unreadable or empty source): the
+# slug would finalize to a manifest of zero files and 404 on view
+[ "${#MAN[@]}" -eq 0 ] && { echo "no files found under $SRC -- nothing uploaded" >&2; exit 1; }
 
 printf '%s\n' ${MAN[@]+"${MAN[@]}"} | auth -X POST --data-binary @- "$BASE_URL/_finalize/$(enc "$NAME")" > /dev/null
 
