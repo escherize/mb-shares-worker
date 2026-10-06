@@ -426,9 +426,9 @@ function page(title, body, opts = {}) {
     --border:#292e42;--code-bg:#16161e;--acc1:#ff9e64;--acc2:#9ece6a;--target:#33301f}
   :root[data-theme=nord]{--bg:#2e3440;--fg:#d8dee9;--muted:#8492ab;--link:#88c0d0;
     --border:#3b4252;--code-bg:#3b4252;--acc1:#d08770;--acc2:#a3be8c;--target:#4c566a}
-  body{max-width:52rem;margin:2rem auto;padding:0 1rem;font:16px/1.6 -apple-system,system-ui,sans-serif;
+  body{max-width:42rem;margin:2rem auto;padding:0 1rem;font:16px/1.6 -apple-system,system-ui,sans-serif;
     background:var(--bg);color:var(--fg)}
-  /* pre/table break out of the 52rem prose column: as wide as content needs,
+  /* pre/table break out of the 42rem prose column: as wide as content needs,
      capped at the viewport, centered; overflow-x scrolls only past that */
   pre,table{background:var(--code-bg);padding:1rem;border-radius:6px;overflow-x:auto;
       box-sizing:border-box;width:fit-content;min-width:100%;
@@ -443,13 +443,27 @@ function page(title, body, opts = {}) {
   .cprow a{font-size:.75rem;color:var(--muted);border:1px solid var(--border);border-radius:6px;
       padding:.1em .6em;text-decoration:none}
   .cprow a:hover{color:var(--fg);border-color:var(--muted)}
-  code{background:var(--code-bg);padding:.15em .35em;border-radius:4px;font-size:.9em}
+  /* vertical rhythm, GitHub-style: blocks space below only; headings sit
+     tight to the section they introduce, far from the one before */
+  :is(h1,h2,h3,h4,h5,h6){line-height:1.25;margin:1.6em 0 .5em}
+  p,ul,ol,blockquote,dl{margin:0 0 1em}
+  /* loose lists (blank lines between items) wrap items in <p>: drop the
+     paragraph gap so items group as a list instead of a column of paragraphs */
+  li>p{margin:0}
+  li+li{margin-top:.25em}li>p+p{margin-top:.5em}
+  li>:is(ul,ol){margin:.25em 0 0}
+  table,.mermaid,.reladraw{margin:0 0 1em}
+  /* ~75ch measure: prose wraps evenly, headings avoid one-word last lines */
+  p,li{text-wrap:pretty}:is(h1,h2,h3,h4,h5,h6){text-wrap:balance}
+  code{background:var(--code-bg);padding:.1em .3em;border-radius:4px;font-size:.9em}
   pre code{background:none;padding:0}
   img{max-width:100%}
   a{color:var(--link)}
   blockquote{border-left:4px solid var(--border);margin-left:0;padding-left:1rem;color:var(--muted)}
   small{color:var(--muted)}
   footer{margin-top:3rem;padding-top:.75rem;border-top:1px solid var(--border)}
+  /* diagrams break out of the 42rem prose column like pre/table */
+  .mermaid,.reladraw{width:min(56rem,100vw - 2rem);position:relative;left:50%;transform:translateX(-50%)}
   .mermaid{text-align:center;overflow-x:auto}
   .mermaid svg{max-width:100%}
   .reladraw{text-align:center;overflow-x:auto}
