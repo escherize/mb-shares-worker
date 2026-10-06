@@ -11,7 +11,7 @@ to paste anywhere (auth-gated), slugs carry a random suffix so they are not
 guessable.
 
 - CLI: `share` (repo `bin/share`, symlinked to `~/bin/share`)
-- Worker: `~/dv/mb-shares-worker` -> https://github.com/escherize/mb-shares-worker (private)
+- Worker: `~/dv/mb-shares-worker` -> https://github.com/escherize/mb-shares-worker
 - Config: `~/.config/mb-shares/env` (BASE_URL + UPLOAD_TOKEN — never commit)
 - This skill: repo `skill/SKILL.md`, served at `/_skill`, installable via the
   snippet on `/_token`
