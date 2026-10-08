@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# share -- publish files to the private mb-shares worker (Cloudflare R2).
+# share -- publish files to the private mb-shares worker (Cloudflare Workers KV).
 # Publishing is instant (no builds; directory uploads PUT 8-way parallel).
 # Viewers sign in with their @metabase.com Google account.
 set -euo pipefail
