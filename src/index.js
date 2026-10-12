@@ -1032,7 +1032,7 @@ const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.j
 // newest first; a diagram that fails to load or parse on one falls back to
 // the next. Exact pins only: a floating range would run any future npm
 // release on every viewer's page unreviewed. Bump deliberately.
-const RELADRAWS = ['0.16.0', '0.11.1']
+const RELADRAWS = ['0.16.0', '0.15.0', '0.11.1']
   .map((v) => `https://cdn.jsdelivr.net/npm/reladraw@${v}/+esm`)
 
 function codePage(env, key, text, lang) {
