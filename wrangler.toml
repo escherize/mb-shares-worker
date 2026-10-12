@@ -23,3 +23,17 @@ ADMIN_EMAIL = "bryan@metabase.com"
 #   GOOGLE_CLIENT_SECRET  -- from the Google OAuth client
 #   SESSION_SECRET        -- random, signs session cookies
 #   UPLOAD_TOKEN          -- random, legacy admin CLI token (others mint theirs at /_token)
+
+# pubshare: same code, public read-only deploy (`wrangler deploy --env pub`).
+# No Google login; only the UPLOAD_TOKEN secret can write, acting as ADMIN_EMAIL.
+#   bun x wrangler secret put UPLOAD_TOKEN --env pub
+[env.pub]
+name = "pubshare"
+
+[[env.pub.kv_namespaces]]
+binding = "SHARES"
+id = "be3e6920240f4cebb6d0c0ab8d4c4f27"
+
+[env.pub.vars]
+PUBLIC = "1"
+ADMIN_EMAIL = "bryan.maass@gmail.com"

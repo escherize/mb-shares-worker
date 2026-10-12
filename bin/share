@@ -4,7 +4,7 @@
 # Viewers sign in with their @metabase.com Google account.
 set -euo pipefail
 
-CONF="$HOME/.config/mb-shares/env"
+CONF="${SHARE_CONF:-$HOME/.config/mb-shares/env}"
 [ -f "$CONF" ] || { echo "missing $CONF (needs BASE_URL and UPLOAD_TOKEN)" >&2; exit 1; }
 . "$CONF"
 
@@ -12,7 +12,7 @@ CONF="$HOME/.config/mb-shares/env"
 # override with MIRROR_DIR in the env file. `share rm` leaves the mirror.
 MIRROR_DIR="${MIRROR_DIR:-$HOME/.local/share/mb-shares}"
 
-auth() { curl -sf --retry 2 -H "Authorization: Bearer $UPLOAD_TOKEN" "$@"; }
+auth() { curl -sSf --retry 2 -H "Authorization: Bearer $UPLOAD_TOKEN" "$@"; }
 enc() { python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
 # accept a pasted share URL anywhere a slug is expected: strip scheme://host/ and trailing /
 deslug() {
@@ -166,7 +166,9 @@ fi
 NAME="$(echo "$NAME" | tr ' ' '-')"
 
 if [ "$EDIT" = 1 ]; then
-  auth "$BASE_URL/_list" | grep -qx "$NAME" \
+  # per-slug manifest lookup, not the bare _list: that one is cached ~60s,
+  # so a share published moments ago would read as missing
+  [ -n "$(auth "$BASE_URL/_list?prefix=$(enc "$NAME/")" || true)" ] \
     || { echo "no existing share '$NAME' (run \`share\` to list); omit -e to create new" >&2; exit 1; }
   auth -X DELETE "$BASE_URL/$(enc "$NAME")/" > /dev/null
   rm -rf "${MIRROR_DIR:?}/$NAME"   # mirror tracks the share's current content

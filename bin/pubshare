@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# pubshare -- `share` pointed at the public pubshare worker
+SHARE_CONF="$HOME/.config/pubshare/env" exec "$(dirname "$(readlink -f "$0")")/share" "$@"

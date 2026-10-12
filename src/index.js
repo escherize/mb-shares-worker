@@ -52,10 +52,12 @@ async function handle(req, env, ctx) {
       return cli(req, url, env, who)
     }
 
-    if (url.pathname === '/auth/callback') return handleCallback(url, env)
+    if (url.pathname === '/auth/callback' && !env.PUBLIC) return handleCallback(url, env)
 
-    const email = await sessionEmail(req, env)
-    if (!email) return redirectToGoogle(url, env)
+    // PUBLIC (pubshare deploy): anonymous read-only viewers, no login.
+    // Writes still go through the bearer-token branch above.
+    const email = env.PUBLIC ? null : await sessionEmail(req, env)
+    if (!email && !env.PUBLIC) return redirectToGoogle(url, env)
 
     const accept = req.headers.get('accept')
     const res = await serve(url, email, env, accept)
@@ -63,7 +65,7 @@ async function handle(req, env, ctx) {
     // views: count successful browser navigations to share content. Assets
     // and hover previews fetch() with accept */*; _peek/_zip carry a /_ path.
     const key = decodeURIComponent(url.pathname.slice(1))
-    if (res.status === 200 && key && !key.startsWith('_') && !key.includes('/_')
+    if (email && res.status === 200 && key && !key.startsWith('_') && !key.includes('/_')
         && accept?.includes('text/html')) {
       ctx.waitUntil(recordView(env, key.split('/')[0], email))
     }
@@ -129,7 +131,10 @@ async function rebuildManifest(env, top) {
 // spurious _man/slug/subdir key that shows up as its own share.
 async function manifest(env, top) {
   if (top.includes('/')) return null
-  return (await env.SHARES.get(`_man/${top}`, 'json')) || rebuildManifest(env, top)
+  // PUBLIC: no heal on read -- anonymous misses would each cost a KV list()
+  // (1k/day). Pub shares always have a manifest (finalize writes it).
+  return (await env.SHARES.get(`_man/${top}`, 'json'))
+    || (env.PUBLIC ? null : rebuildManifest(env, top))
 }
 
 // full key names for a share, from its manifest
@@ -218,11 +223,16 @@ async function cli(req, url, env, who) {
     const files = (await req.text()).split('\n').map((s) => s.trim()).filter(Boolean)
     if (!files.length) return new Response('empty manifest\n', { status: 400 })
     await writeManifest(env, top, files, owner || who, Date.now())
+    // push counter for /_stats: one finalize = one push. ponytail: single
+    // read-modify-write key, concurrent pushes can drop a count
+    const pushes = (await env.SHARES.get('_pushes', 'json')) || {}
+    pushes[who] = (pushes[who] || 0) + 1
+    await env.SHARES.put('_pushes', JSON.stringify(pushes))
     return new Response('ok\n')
   }
 
   // _-prefixed top segments are reserved (the _own/ + _man/ + _views/
-  // keys live in KV; _list/_token/_cli/_peek/_zip/_views are routes). Reads AND
+  // keys live in KV; _list/_token/_stats/_cli/_peek/_zip/_views are routes). Reads AND
   // writes: a PUT to /_own/<slug> could hijack ownership, a GET/list under
   // _own/ would enumerate every slug (share URLs are meant to be
   // unguessable).
@@ -301,6 +311,8 @@ async function hmac(env, data) {
 async function tokenEmail(env, bearer) {
   if (!bearer) return null
   if (env.UPLOAD_TOKEN && bearer === env.UPLOAD_TOKEN) return env.ADMIN_EMAIL
+  // PUBLIC has no login, so no personal tokens: UPLOAD_TOKEN is the only writer
+  if (env.PUBLIC) return null
   const [tag, emailB64, sig] = bearer.split('.')
   if (tag !== 't' || !emailB64 || !sig) return null
   if (sig !== await hmac(env, `tok.${emailB64}`)) return null
@@ -615,20 +627,22 @@ ${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.
   // reladraw fences -> inline SVG, same lazy/fallback deal as mermaid. A
   // parse error leaves that block as code.
   var rds = document.querySelectorAll('code.language-reladraw')
-  if (rds.length) import('${RELADRAW}').then(function (rd) {
-    // page theme wins over a file's own diagram theme:; tokyo has no
-    // reladraw twin so it falls back to dark
-    var dark = tname ? tname !== 'light' : matchMedia('(prefers-color-scheme: dark)').matches
-    var theme = rd.THEMES[tname] || rd.THEMES[dark ? 'dark' : 'light']
-    rds.forEach(function (c) {
-      try {
-        var d = document.createElement('div')
-        d.className = 'reladraw'
-        d.innerHTML = rd.compile(c.textContent, { theme: theme })
-        c.closest('pre').replaceWith(d)
-      } catch (e) {}
-    })
-  })
+  var RDV = ${JSON.stringify(RELADRAWS)}, rdMods = {}
+  // page theme wins over a file's own diagram theme:; tokyo has no
+  // reladraw twin so it falls back to dark
+  var rdDark = tname ? tname !== 'light' : matchMedia('(prefers-color-scheme: dark)').matches
+  // try each version in order (each loaded at most once, only if needed);
+  // a block no version can render stays as code
+  function rdRender(c, i) {
+    if (i >= RDV.length) return
+    ;(rdMods[i] = rdMods[i] || import(RDV[i])).then(function (rd) {
+      var d = document.createElement('div')
+      d.className = 'reladraw'
+      d.innerHTML = rd.compile(c.textContent, { theme: rd.THEMES[tname] || rd.THEMES[rdDark ? 'dark' : 'light'] })
+      c.closest('pre').replaceWith(d)
+    }).catch(function () { rdRender(c, i + 1) })
+  }
+  rds.forEach(function (c) { rdRender(c, 0) })
   // theme picker: fixed bottom-right on every rendered page
   var tsel = document.createElement('select')
   tsel.id = 'thg'; tsel.title = 'theme'
@@ -655,6 +669,15 @@ ${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.
         cp.textContent = 'copied'; setTimeout(function () { cp.textContent = 'copy' }, 1200)
       })
       .catch(function () {})
+  })
+  // cmd+c with nothing selected: copy [title](url) as a markdown link.
+  // Brackets in the title are backslash-escaped so the link text survives.
+  document.addEventListener('keydown', function (e) {
+    if (!e.metaKey || e.key !== 'c' || getSelection().toString()) return
+    if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return
+    e.preventDefault()
+    var t = document.title.replace(/[\\[\\]]/g, '\\\\$&')
+    navigator.clipboard.writeText('[' + t + '](' + location.href.split('#')[0] + ')')
   })
   // auto-refresh: reload when a push changes the content fingerprint
   ${opts.poll === false ? '' : `setInterval(function () {
@@ -688,6 +711,10 @@ function ago(t) {
 
 async function serve(url, email, env, accept) {
   const key = decodeURIComponent(url.pathname.slice(1))
+
+  // PUBLIC: share content only. No listing (it would expose every slug and
+  // burn the 1k/day KV list quota), no token page, no stats.
+  if (env.PUBLIC && (key === '' || key === '_token' || key === '_stats')) return notFound()
 
   if (key === '') {
     // /?mine: admin's bookmarkable "just my shares" view (non-admins
@@ -841,6 +868,30 @@ pvPump()
 </script>`, { vsrc: JSON.stringify(sorted), poll: false })
   }
 
+  // /_stats (admin): shares + files per owner from the cached _man/ list,
+  // pushes from the _pushes counter (counted since it was added)
+  if (key === '_stats') {
+    if (email !== env.ADMIN_EMAIL) return new Response('forbidden', { status: 403 })
+    const pushes = (await env.SHARES.get('_pushes', 'json')) || {}
+    const by = new Map()
+    const row = (o) => by.get(o) || by.set(o, { shares: 0, files: 0, pushes: pushes[o] || 0 }).get(o)
+    for (const s of (await shareTops(env)).values()) {
+      const b = row(s.o || env.ADMIN_EMAIL)
+      b.shares++; b.files += s.n
+    }
+    Object.keys(pushes).forEach(row)
+    const rows = [...by].sort((a, b) => b[1].shares - a[1].shares)
+    const bar = (n, max) => '█'.repeat(n && Math.max(1, Math.round(n / max * 30)))
+    const maxS = Math.max(1, ...rows.map(([, b]) => b.shares))
+    const maxP = Math.max(1, ...rows.map(([, b]) => b.pushes))
+    return page('stats', `<h1>stats</h1>
+<table><tr><th>owner</th><th>shares</th><th></th><th>files</th><th>pushes</th><th></th></tr>${rows.map(([o, b]) =>
+  `<tr><td>${esc(o.split('@')[0])}</td><td>${b.shares}</td><td>${bar(b.shares, maxS)}</td>
+<td>${b.files}</td><td>${b.pushes}</td><td>${bar(b.pushes, maxP)}</td></tr>`).join('')}</table>
+<p><small>pushes counted since the counter was added</small></p>`,
+    { poll: false })
+  }
+
   // /_token: personal CLI token + setup, derived from the signed-in session
   if (key === '_token') {
     const emailB64 = b64url(new TextEncoder().encode(email))
@@ -885,6 +936,9 @@ and it does the rest. Re-run anytime to pull the latest version.</p>
 </div>`)
   }
 
+  // reserved namespace: /_own/... must not render or list (slug enumeration)
+  if (key.startsWith('_')) return notFound()
+
   // /slug/_peek: first lines of the share's main file, for hover previews
   if (key.endsWith('/_peek')) {
     const prefix = key.slice(0, -'_peek'.length)
@@ -923,9 +977,6 @@ and it does the rest. Re-run anytime to pull the latest version.</p>
     })
   }
 
-  // reserved namespace: /_own/... must not render or list (slug enumeration)
-  if (key.startsWith('_')) return notFound()
-
   if (key.endsWith('/')) {
     for (const cand of [`${key}index.md`, `${key}index.html`]) {
       const hit = await render(cand, env, accept)
@@ -939,7 +990,7 @@ and it does the rest. Re-run anytime to pull the latest version.</p>
       (n) => `<li><a href="/${esc(n)}">${esc(n.slice(key.length))}</a></li>`,
     )
     return page(key, `<h1>${esc(key.replace(/\/$/, ''))}</h1><ul>${items.join('')}</ul>
-<p><a href="/${esc(key)}_zip">download all (.zip)</a></p>`, { slug: key.split('/')[0] })
+<p><a href="/${esc(key)}_zip">download all (.zip)</a></p>`, { slug: !env.PUBLIC && key.split('/')[0] })
   }
 
   const hit = await render(key, env, accept)
@@ -978,14 +1029,18 @@ const CODE_LANGS = {
 const HLJS = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1'
 // jsdelivr, not cdnjs: mermaid 11 ships no single-file build on cdnjs
 const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js'
-const RELADRAW = 'https://cdn.jsdelivr.net/npm/reladraw@0.11.1/+esm'
+// newest first; a diagram that fails to load or parse on one falls back to
+// the next. Exact pins only: a floating range would run any future npm
+// release on every viewer's page unreviewed. Bump deliberately.
+const RELADRAWS = ['0.16.0', '0.11.1']
+  .map((v) => `https://cdn.jsdelivr.net/npm/reladraw@${v}/+esm`)
 
-function codePage(key, text, lang) {
+function codePage(env, key, text, lang) {
   // page() carries hljs for all rendered pages; the class is enough
   return page(
     key.split('/').pop(),
     `<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(text)}</code></pre>`,
-    { copy: true, slug: key.split('/')[0] },
+    { copy: true, slug: !env.PUBLIC && key.split('/')[0] },
   )
 }
 
@@ -1020,7 +1075,7 @@ function csvCells(text) {
 
 const MAX_CSV_ROWS = 1000
 
-function csvPage(key, text) {
+function csvPage(env, key, text) {
   const clipped = text.length > 2_000_000
   const rows = csvCells(clipped ? text.slice(0, 2_000_000).replace(/\n[^\n]*$/, '') : text)
   const tr = (cells, tag) => `<tr>${cells.map((c) => `<${tag}>${esc(c)}</${tag}>`).join('')}</tr>`
@@ -1030,7 +1085,7 @@ function csvPage(key, text) {
   return page(
     key.split('/').pop(),
     `<table><thead>${tr(rows[0] || [], 'th')}</thead><tbody>${shown.map((r) => tr(r, 'td')).join('')}</tbody></table>${note}`,
-    { copy: true, slug: key.split('/')[0] },
+    { copy: true, slug: !env.PUBLIC && key.split('/')[0] },
   )
 }
 
@@ -1050,14 +1105,14 @@ async function render(key, env, accept) {
       })
     }
     const title = (md.match(/^#\s+(.+)$/m) || [, key])[1]
-    return page(title, marked.parse(md), { copy: true, slug: key.split('/')[0] })
+    return page(title, marked.parse(md), { copy: true, slug: !env.PUBLIC && key.split('/')[0] })
   }
 
   if (wantsHtml && ['json', 'jsonl', 'ndjson', 'csv'].includes(ext)) {
     const text = await env.SHARES.get(key, 'text')
     if (text === null) return null
-    if (ext === 'csv') return csvPage(key, text)
-    return codePage(key, prettyJson(text, ext), 'json')
+    if (ext === 'csv') return csvPage(env, key, text)
+    return codePage(env, key, prettyJson(text, ext), 'json')
   }
 
   if (TYPES[ext]) {
@@ -1078,5 +1133,5 @@ async function render(key, env, accept) {
       headers: { 'content-type': 'application/octet-stream', 'cache-control': 'private, no-cache' },
     })
   }
-  return codePage(key, new TextDecoder().decode(buf), CODE_LANGS[ext])
+  return codePage(env, key, new TextDecoder().decode(buf), CODE_LANGS[ext])
 }
