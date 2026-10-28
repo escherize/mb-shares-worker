@@ -222,6 +222,13 @@ async function cli(req, url, env, who) {
     }
     const files = (await req.text()).split('\n').map((s) => s.trim()).filter(Boolean)
     if (!files.length) return new Response('empty manifest\n', { status: 400 })
+    // re-share (share -e) uploads over the old keys instead of deleting
+    // first: a delete gap gets cached as a miss at other edges for ~60s.
+    // Prune files the new push dropped, after the new ones are in place.
+    const old = await manifest(env, top) // heals legacy shares via list()
+    const keep = new Set(files)
+    await Promise.all((old?.files || []).filter((f) => !keep.has(f))
+      .map((f) => env.SHARES.delete(`${top}/${f}`)))
     await writeManifest(env, top, files, owner || who, Date.now())
     // push counter for /_stats: one finalize = one push. ponytail: single
     // read-modify-write key, concurrent pushes can drop a count
@@ -682,7 +689,9 @@ ${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.
   // auto-refresh: reload when a push changes the content fingerprint
   ${opts.poll === false ? '' : `setInterval(function () {
     fetch(location.href, { cache: 'no-store' })
-      .then(function (r) { return r.text() })
+      // skip non-2xx (a 404 seen through KV lag, a 503 quota hiccup):
+      // reloading into one strands the viewer on an error page
+      .then(function (r) { return r.ok ? r.text() : '' })
       .then(function (t) {
         var m = t.match(/name="v" content="([^"]+)"/)
         if (m && m[1] !== '${v}') location.reload()
@@ -691,11 +700,11 @@ ${opts.slug ? `<footer><small>clone this share: <code>share download ${esc(opts.
   }, 15000)`}
 })()
 </script>`,
-    { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache' } },
+    { status: opts.status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'private, no-cache' } },
   )
 }
 
-const notFound = () => page('not found', '<h1>404</h1>')
+const notFound = () => page('not found', '<h1>404</h1>', { status: 404 })
 
 function ago(t) {
   if (!t) return '—'
